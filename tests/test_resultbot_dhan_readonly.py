@@ -88,7 +88,7 @@ class DhanReadOnlyTests(unittest.TestCase):
             self.assertEqual(dh.normalize_totp_input(
                 "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ"),"287082")
             self.assertEqual(len(dh.normalize_totp_input("JBSWY3DPEHPK3PXP")),6)
-        for invalid in ("1234567890123456","INVALID-NOT-BASE32","abc","",None):
+        for invalid in ("1234567890123456","INVALID-TOTP-08","abc","",None):
             with self.assertRaises(dh.DhanReadError):
                 dh.normalize_totp_input(invalid)
 
