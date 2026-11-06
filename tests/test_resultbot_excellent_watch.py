@@ -143,47 +143,59 @@ class ExcellentOnlyTests(unittest.TestCase):
         moment=datetime(2026,11,6,16,20,0,tzinfo=timezone.utc)
         self.assertTrue(ew.recent_test_candidate(moment-timedelta(minutes=5),moment))
         self.assertTrue(ew.recent_test_candidate(moment-timedelta(minutes=14),moment))
-        self.assertFalse(ew.recent_test_candidate(moment-timedelta(minutes=16),moment))
+        self.assertTrue(ew.recent_test_candidate(moment-timedelta(minutes=16),moment))
+        self.assertFalse(ew.recent_test_candidate(moment-timedelta(minutes=31),moment))
         self.assertFalse(ew.recent_test_candidate(moment+timedelta(minutes=3),moment))
         self.assertFalse(ew.recent_test_candidate(moment.replace(tzinfo=None),moment))
 
-    def test_test_group_excellent_only_with_marker(self):
+
+    def test_test_group_excellent_only_without_marker(self):
+        for sym in ("YESBANK","DCBBANK","GROWW"):
+            self.assertEqual(
+                ew.parse_test_alert(f"#{sym} - 🏆🔥 Excellent Results - 25 seconds ago"),
+                (sym,"excellent"))
         self.assertEqual(
             ew.parse_test_alert("[RBTEST] #ROLEXRINGS - 🏆🔥 Excellent Results"),
             ("ROLEXRINGS", "excellent"))
         for invalid in (
-            "#ROLEXRINGS - Excellent Results",
-            "[RBTEST] #ROLEXRINGS - 🌟 Great Results",
-            "[RBTEST] #ROLEXRINGS Good Results",
-            "[RBTEST] #A #B Excellent Results",
+            "#ROLEXRINGS - 🌟 Great Results",
+            "#ROLEXRINGS Good Results",
+            "#ROLEXRINGS Weak Results",
+            "#A #B Excellent Results",
+            "No stock here Excellent Results",
+            "Random chat message",
         ):
             self.assertIsNone(ew.parse_test_alert(invalid)[0])
 
-    def test_test_alert_is_never_saved_as_live_research(self):
+    def test_three_realistic_test_posts_not_saved_as_live_research(self):
         with tempfile.TemporaryDirectory() as d:
             con = ew.setup_db(Path(d)/"test.db")
             sent = datetime.now(timezone.utc)
             group_id = -1234567890
-            msg = "[RBTEST] #ROLEXRINGS - 🏆🔥 Excellent Results"
-            self.assertEqual(ew.enqueue_test_log(con,group_id,41,sent,msg),"test_queued")
-            self.assertEqual(ew.enqueue_test_log(con,group_id,41,sent,msg),"duplicate")
+            for mid, sym in enumerate(("YESBANK","DCBBANK","GROWW"), start=41):
+                msg = f"#{sym} - 🏆🔥 Excellent Results - 25 seconds ago"
+                self.assertEqual(ew.enqueue_test_log(con,group_id,mid,sent,msg),"test_queued")
+                self.assertEqual(ew.enqueue_test_log(con,group_id,mid,sent,msg),"duplicate")
             self.assertEqual(
-                ew.enqueue_test_log(con,group_id,42,sent,"[RBTEST] #FOO - Great Results"),
+                ew.enqueue_test_log(con,group_id,44,sent,"#FOO - Great Results"),
                 "not_excellent")
             self.assertEqual(
-                ew.enqueue_test_log(con,group_id,43,sent,"#ROLEXRINGS - Excellent Results"),
-                "not_marked_test")
+                ew.enqueue_test_log(con,group_id,45,sent,"Random chatter"),
+                "not_excellent")
             self.assertEqual(
-                ew.enqueue_test_log(con, -int(f"100{ew.CHANNEL_ID}"),44,sent,msg),
+                ew.enqueue_test_log(con,-int(f"100{ew.CHANNEL_ID}"),46,sent,
+                    "#YESBANK - 🏆🔥 Excellent Results"),
                 "invalid_test_source")
             self.assertEqual(con.execute("SELECT COUNT(*) FROM alerts").fetchone()[0],0)
             self.assertEqual(con.execute("SELECT COUNT(*) FROM one_minute_bars").fetchone()[0],0)
-            self.assertEqual(con.execute("SELECT COUNT(*) FROM log_outbox").fetchone()[0],1)
-            kind, card = con.execute("SELECT kind,text_html FROM log_outbox").fetchone()
-            self.assertEqual(kind,"TEST_EXCELLENT_ALERT")
-            self.assertIn("NOT A REAL EARNINGS ALERT",card)
-            self.assertIn("NOT SUBMITTED",card)
-            self.assertIn("execution price: n/a",card.lower())
+            self.assertEqual(con.execute("SELECT COUNT(*) FROM log_outbox").fetchone()[0],3)
+            cards=con.execute("SELECT kind,text_html FROM log_outbox ORDER BY id").fetchall()
+            for (kind,card),sym in zip(cards,("YESBANK","DCBBANK","GROWW")):
+                self.assertEqual(kind,"TEST_EXCELLENT_ALERT")
+                self.assertIn("#"+sym,card)
+                self.assertIn("NOT A REAL EARNINGS ALERT",card)
+                self.assertIn("NOT SUBMITTED",card)
+                self.assertIn("execution price: n/a",card.lower())
             con.close()
 
     def test_offline_self_test(self):
