@@ -46,6 +46,22 @@ class ExcellentOnlyTests(unittest.TestCase):
             self.assertLess(r['observed_high_pct'],10)
             con.close()
 
+    def test_extremes_exclude_reference_bar(self):
+        with tempfile.TemporaryDirectory() as d:
+            con=ew.setup_db(Path(d)/"db.sqlite3")
+            t=datetime(2026,11,6,7,5,30,tzinfo=timezone.utc)
+            ew.add_alert(con,42,t,"#ROLEXRINGS Excellent Results")
+            start=int(t.timestamp())//60*60+60
+            bars=[
+                {"symbol":"ROLEXRINGS","ts_utc":start,"open":100,"high":190,"low":10,"close":100,"volume":100,"fetched_utc":123},
+                {"symbol":"ROLEXRINGS","ts_utc":start+60,"open":100,"high":105,"low":95,"close":101,"volume":100,"fetched_utc":123},
+            ]
+            ew.store_bars(con,"ROLEXRINGS",bars)
+            summary=ew.summarize(con,1)
+            self.assertEqual(summary["observed_high_pct"],5.0)
+            self.assertEqual(summary["observed_low_pct"],-5.0)
+            con.close()
+
     def test_no_bar_and_no_price_invention(self):
         with tempfile.TemporaryDirectory() as d:
             con=ew.setup_db(Path(d)/'db.sqlite3')
