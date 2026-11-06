@@ -1,102 +1,117 @@
-# ResultBot — REAL Dhan Equity AMO, Terminal YES / NO Control
+# ResultBot — Real Dhan Equity AMO: persistent YES / NO switch
 
-**LIVE ORDER FEATURE:** The YES button can arm genuine Dhan broker order
-placement. It is OFF by default. No browser/WebUI is required.
+The AMO switch is a **master enable/disable control**, not an order-count selector.
+The existing ResultBot Telegram listener and separate Dhan token service stay in place.
+No browser/WebUI required. No live order is submitted during installation.
 
-## Why a YES / NO menu?
+## YES — AMO ON until you choose NO
 
-The original ResultBot web dashboard is not operational. This release
-installs a terminal switch (`amo_yes_no.sh`) which uses **whiptail** YES/NO
-buttons when available and a simple **type YES or NO** fallback otherwise.
-No separate HTTP service, port 8093 or panel login is needed.
+Once the owner selects **YES** in `amo_yes_no.sh`:
+- The switch is durably **ON** across multiple alerts, runtime restarts and days.
+- **Every distinct, new, eligible Excellent Results alert** from the official
+  monitored Earnings Pulse channel may create its own genuine Dhan Equity AMO.
+- The owner's authenticated Telegram account may deliberately trigger a real
+  order by posting a new `[RBLIVEAMO] ... Excellent Results` message in the
+  configured ResultBot Test Group.
+- No artificial one-order limit, maximum number per day, one-shot disarm,
+  or ten-minute expiry. It stays ON until you explicitly select **NO**
+  (or a critical safety gate disables entries).
+- Each order has its **own** durable intent, idempotency correlation ID,
+  verified security ID and broker order ID. A duplicated Telegram message
+  cannot trigger another order.
+- The current **per-order** default budget remains ₹500 (adjustable via the
+  authenticated owner's CLI to ₹100–₹1000); this is a *sizing safeguard*,
+  not a cap on how many orders you can place.
+- Funds checks include outstanding ResultBot AMO commitments, and invalid
+  account, token, instrument mapping, market session or static outbound IP
+  will block that particular order.
 
-YES:
-- Checks the real Dhan account, available funds, registered static IP and
-  VM's outbound IP; verifies that the original trading service is disabled.
-- Arms **ONE** real Dhan Equity `NSE_EQ / CNC / BUY / LIMIT / OPEN` AMO
-  with maximum ₹500 notional, for a new eligible owner-originated signal in
-  the existing authorized ResultBot **Test Group**.
-- The arm expires after ten minutes and disarms automatically once a
-  signal is accepted for submission. Choosing YES **alone** does not place an order.
-- An actual Dhan broker `POST /orders` may follow the next eligible
-  Telegram message. Dhan's genuine `orderId` is recorded in durable
-  local SQLite and placed in the existing Log Group when verified.
+## NO — new AMO submissions OFF
 
-NO:
-- Immediately blocks new AMO submissions (including already-reserved
-  requests that have not entered the irreversible POST transition).
-- Does **not** cancel a Dhan order already accepted or being submitted.
+Selecting **NO** blocks future orders. An intent that has not crossed the
+irreversible broker-submission transition must not be submitted. Orders
+already accepted by Dhan are **not** cancelled by switching OFF.
 
-Safety: at most **one attempt per IST day** and one at a time; the
-original `trading_bot.service` remains inactive and disabled. A stored
-intent prevents silent duplicate POST requests after a timeout or restart.
-The listener uses the existing Telegram account, Log Group outbox and
-separately renewed private Dhan token.
+There is **no automatic 120-second cancellation**. Pending AMOs remain
+pending until *you* request cancellation or Dhan reaches a terminal state.
+The broker-order monitor continues while OFF, to report changes.
 
-## Install (once, on the ResultBot VM)
-
-Use one pinned commit URL, never copy in-development main-branch files.
-The published `resultbot/install_real_amo.sh` downloads
-`equity_amo_live.py`, `excellent_watch.py`, `amo_yes_no.sh`,
-compiles them, checks Dhan preflight with **GET only**, backs up the
-existing listener, initializes the switch to OFF, and restarts
-**only** the ResultBot listener.
-
-If Dhan IP whitelisting or any other preflight fails, the original
-ResultBot listener is left in place. The installer does NOT submit orders.
-
-Then launch the terminal YES/NO menu at any time:
+To see the switch state at any time:
 
 ```bash
-bash ~/resultbot-data/amo_yes_no.sh
+~/uditbot/venv/bin/python ~/resultbot-data/equity_amo_live.py status-short
 ```
 
-It presents a YES and a NO button when `whiptail` is available.
-The menu always defaults to **NO**. Without `whiptail`, type
-uppercase **YES** to arm or anything else to disable.
-
-For an actual order attempt, after choosing YES send this **new**
-message *from the Telegram account running ResultBot* into the
-authorized ResultBot Test Group:
-
-```text
-[RBLIVEAMO] #YESBANK - 🏆🔥 Excellent Results
-```
-
-`[RBLIVEAMO]` is a genuine order trigger, distinct from the older
-`[RBAMO]` simulator. The Dhan order may be refused because of the
-market calendar, symbol price, missing instrument mapping, static IP,
-missing broker AMO permissions, or risk limits. If Dhan returns an
-authentic order ID, it appears in the Real Equity AMO Telegram Log
-Group card and in:
+To see all ResultBot-owned AMOs, broker IDs, states, and intent IDs:
 
 ```bash
 ~/uditbot/venv/bin/python ~/resultbot-data/equity_amo_live.py status
 ```
 
-A verified order ID does **not** mean the order was filled.
-
-## Cancellation and risk
-
-A background monitor attempts to cancel an accepted pending AMO after
-120 seconds and checks the broker state. The owner can also request
-cancellation explicitly:
+To cancel one specific resultbot-owned order, take its **intent ID** from
+the status output (NOT a broker order number):
 
 ```bash
 ~/uditbot/venv/bin/python ~/resultbot-data/equity_amo_live.py cancel --intent-id 1
 ```
 
-Use the actual intent number from `status`. **Never** assume a
-cancellation succeeded until Dhan reports `CANCELLED`. The Dhan
-order may execute before cancellation, or the cancellation request can
-be delayed or refused. Partial fills create actual holdings. No
-stop-loss or protective target order is installed automatically.
+Replace `1` with the real intent ID. Do not assume a cancellation succeeded
+until the broker confirms `CANCELLED`. Cancellation might fail or arrive
+after an AMO has partially or fully filled. A filled stock holding is real;
+the ResultBot AMO adapter does **not** attach protective stop/target orders.
+Manage any holding separately in your broker account.
 
-Dhan requires a whitelisted static outbound IP for real placement and
-cancellation. Reference: https://dhanhq.co/docs/v2/authentication/
-Order placement and cancellation: https://dhanhq.co/docs/v2/orders/
+## Install the terminal switch (no WebUI)
 
-**Do not run the old WebUI installer** from an earlier pinned commit:
-the terminal-only release supersedes it. This is a separate one-shot
-live-order feature, not a replacement for UditBot or the existing
-research and balance collectors.
+The pinned installer `resultbot/install_real_amo.sh` downloads the
+`equity_amo_live.py`, `excellent_watch.py`, and `amo_yes_no.sh` files
+from the same commit, compiles them, performs **read-only Dhan profile /
+funds / IP-whitelist preflight**, and backs up the existing listener before
+installing. It leaves the switch OFF by default and restarts only the
+ResultBot Telegram listener. On a failed preflight, the original listener
+is preserved.
+
+Then run:
+
+```bash
+bash ~/resultbot-data/amo_yes_no.sh
+```
+
+Select **YES** to keep real AMO on, or **NO** to switch it off.
+
+If `whiptail` exists, the terminal shows YES / NO buttons. Otherwise
+type `YES` or `NO`. You can repeat this operation whenever you wish.
+
+Example manual trigger (owner-only, Test Group):
+
+```text
+[RBLIVEAMO] #YESBANK - 🏆🔥 Excellent Results
+```
+
+The same ON switch enables naturally arriving, unprefixed official
+Earnings Pulse Excellent alerts. Only newly received strict Excellent
+signals are eligible. Old/replayed, unwanted, duplicate, or non-Excellent
+messages cannot submit AMOs.
+
+## Safety, brokerage verification and transparency
+
+- Each real request uses `NSE_EQ / CNC / BUY / LIMIT / DAY`,
+  `afterMarketOrder=true`, `amoTime=OPEN`.
+- Verified Dhan account, read-only balance, static-IP allowlist,
+  official NSE security ID and a bounded price reference are checked
+  again before each order.
+- A timeout after `POST /orders` results in an **UNKNOWN** order outcome.
+  ResultBot must reconcile using Dhan's correlation/order lookup, not
+  resubmit automatically. No fabricated broker IDs or trade fills.
+- A genuine Dhan order ID is an acknowledgment, not proof of execution.
+  Order-status polling and the Telegram Log Group continue even when
+  AMO is switched OFF.
+- The default risk sizing is intentionally separate from the operator's
+  YES/NO **number-of-orders** decision.
+
+Official broker docs:
+https://dhanhq.co/docs/v2/orders/
+https://dhanhq.co/docs/v2/funds/
+
+**Important:** The earlier pinned one-shot / 120-second-auto-cancel
+installer is superseded. Do not deploy an older revision of this feature.
