@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 from contextlib import contextmanager
+import hashlib
 import json
 import math
 import os
@@ -67,7 +68,7 @@ def connect_db(path: Path | None = None) -> sqlite3.Connection:
     CREATE TABLE IF NOT EXISTS control(
       id INTEGER PRIMARY KEY CHECK(id=1),
       armed INTEGER NOT NULL DEFAULT 0 CHECK(armed IN(0,1)),
-      source TEXT NOT NULL DEFAULT 'TEST',
+      source TEXT NOT NULL DEFAULT 'BOTH',
       budget INTEGER NOT NULL DEFAULT 500,
       expires INTEGER NOT NULL DEFAULT 0,
       armed_since INTEGER NOT NULL DEFAULT 0,
@@ -145,8 +146,8 @@ def trading_service_stopped() -> bool:
         return False
 
 
-def arm(*, source: str = "TEST", budget: int = BUDGET_DEFAULT) -> dict:
-    if source not in ("TEST","EARNINGS_PULSE"):
+def arm(*, source: str = "BOTH", budget: int = BUDGET_DEFAULT) -> dict:
+    if source not in ("TEST","EARNINGS_PULSE","BOTH"):
         raise LiveAmoError("Invalid source")
     if type(budget) is not int or not 100 <= budget <= BUDGET_MAX:
         raise LiveAmoError("Budget must be whole INR from 100 to 1000")
@@ -154,7 +155,7 @@ def arm(*, source: str = "TEST", budget: int = BUDGET_DEFAULT) -> dict:
         raise LiveAmoError("Original trading_bot.service must be inactive AND disabled")
     if watch.configured_log_group_id() is None:
         raise LiveAmoError("Telegram Log Group is not configured; real AMO cannot be armed")
-    if source=="TEST" and watch.configured_test_group_id() is None:
+    if source in ("TEST","BOTH") and watch.configured_test_group_id() is None:
         raise LiveAmoError("Authorized Telegram Test Group is not configured")
     if not _session_closed():
         raise LiveAmoError("Real Equity AMO can only be armed in a closed-market window")
@@ -200,15 +201,20 @@ def reserve(source: str, msg_id: int, symbol: str, sent_utc: int) -> int | None:
         con.execute("BEGIN IMMEDIATE")
         try:
             c=_control(con)
-            if not(c["armed"] and c["source"]==source
+            if not(c["armed"] and c["source"] in (source,"BOTH")
                     and int(sent_utc)>=c["armed_since"]):
                 con.execute("COMMIT")
                 return None
             # NO auto-disarm. UNIQUE(source,msg_id) ensures at-most-one intent
             # per Telegram message across restarts. OFF is owner-controlled.
             account,_=dh.load_credentials()
-            correlation="RBA"+str(c["arm_seq"])+"-"+str(msg_id)
-            correlation=correlation[:30]
+            # Distinguish overlapping message IDs from the two sources.
+            # Dhan correlation IDs must fit 30 characters and are never reused
+            # for distinct Telegram messages, including after switch toggles.
+            digest=hashlib.sha256(
+                f"{source}:{msg_id}:{c['arm_seq']}".encode("utf-8")
+            ).hexdigest()[:24]
+            correlation="RBA-"+digest
             cur=con.execute(
                 """INSERT OR IGNORE INTO intents
                  (source,msg_id,symbol,alert_ts,created_ts,account,arm_stop_seq,budget,correlation)
@@ -421,7 +427,7 @@ def execute(intent_id:int) -> None:
                 control=_control(con)
                 if (not control["armed"] or
                     control["stop_seq"] != item["arm_stop_seq"] or
-                    control["source"] != item["source"]):
+                    control["source"] not in (item["source"],"BOTH")):
                     raise LiveAmoError("AMO is OFF or owner changed the active source")
                 # In-flight orders need funds reserved even if simultaneous
                 # Dhan fund reads still show the original available balance.
@@ -681,7 +687,7 @@ def main():
     sub.add_parser("self-test")
     sub.add_parser("off")
     x=sub.add_parser("arm")
-    x.add_argument("--source",choices=["TEST","EARNINGS_PULSE"],default="TEST")
+    x.add_argument("--source",choices=["TEST","EARNINGS_PULSE","BOTH"],default="BOTH")
     x.add_argument("--budget",type=int,default=BUDGET_DEFAULT)
     x=sub.add_parser("cancel")
     x.add_argument("--intent-id",type=int,required=True)
