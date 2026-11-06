@@ -117,13 +117,121 @@ def test():
         else:raise AssertionError('Non-increasing cumulative exits accepted')
     print('PASS: 9 mode combinations + safety validation')
 
+
+# Numbered menu: preserves existing JSON and never enables execution.
+def _choice(title, choices, current):
+    print("\n"+title)
+    for number, (code, description) in enumerate(choices, 1):
+        print(f"  {number}. {description}" + ("  [CURRENT]" if code == current else ""))
+    default = next(i for i, (code, _) in enumerate(choices, 1) if code == current)
+    raw = input(f"Choose 1-{len(choices)} [Enter={default}]: ").strip()
+    n = int(raw) if raw else default
+    if not 1 <= n <= len(choices):
+        raise ValueError("Selection must be a displayed number")
+    return choices[n-1][0]
+
+def _yes(question):
+    return input(question + " [y/N]: ").strip().lower() in ("y", "yes")
+
+def _number(question, default):
+    raw = input(f"{question} [{default:g}]: ").strip()
+    return float(raw) if raw else float(default)
+
+def _count(question, default):
+    n = int(_number(question, default))
+    if not 0 <= n <= 5:
+        raise ValueError("Enter a number of stages from 0 to 5")
+    return n
+
+def _custom_levels(d, side):
+    if side == "down":
+        key = {"CUT":"cut_down","AVERAGE":"average_down","STOP_ONLY":None}[d["down_mode"]]
+        label = "price DROP"
+    else:
+        key = {"TAKE_PROFIT":"take_profit","ADD_UP":"add_up","TARGET_ONLY":None}[d["up_mode"]]
+        label = "price RISE"
+    if key is None:
+        print("No intermediate stages for this option.")
+        return
+    prev = d[key]
+    count = _count(f"How many {label} stages?", len(prev))
+    stages = []
+    for i in range(count):
+        if key in ("cut_down", "take_profit"):
+            old_trigger = prev[i][0] if i < len(prev) else (stages[-1][0]+2 if stages else 2)
+            old_fraction = prev[i][1] if i < len(prev) else min(99, 50+25*i)
+            trig = _number(f"  Stage {i+1}: trigger after {label} (%)", old_trigger)
+            frac = _number(f"  Stage {i+1}: TOTAL % of original shares to have sold", old_fraction)
+            stages.append([trig, frac])
+        else:
+            old_trigger = prev[i] if i < len(prev) else (stages[-1]+2 if stages else 2)
+            stages.append(_number(f"  Stage {i+1}: trigger after {label} (%)", old_trigger))
+    d[key] = stages
+
+def easy(d):
+    """Human-friendly configuration wizard; config only, not order execution."""
+    d = deepcopy(d)
+    print("\n====== RESULTBOT: EASY STRATEGY SETUP ======")
+    print("Choose a number. Press Enter to keep your current selection.")
+    print("No broker orders will be sent.")
+    old_down, old_up = d["down_mode"], d["up_mode"]
+    d["down_mode"] = _choice("WHEN STOCK PRICE FALLS:", [
+        ("CUT","Cut losses gradually: sell part of the position"),
+        ("AVERAGE","Average down: buy extra shares"),
+        ("STOP_ONLY","Hold: no partial actions; final stop only"),
+    ], d["down_mode"])
+    d["up_mode"] = _choice("WHEN STOCK PRICE RISES:", [
+        ("TAKE_PROFIT","Book profits gradually: sell part of the position"),
+        ("ADD_UP","Add up: buy extra shares"),
+        ("TARGET_ONLY","Hold: sell everything at final target"),
+    ], d["up_mode"])
+    presets = {
+        "cut_down": [[3,50],[5,75]],
+        "average_down": [3,6],
+        "take_profit": [[2,50],[4,75]],
+        "add_up": [2,4],
+    }
+    if d["down_mode"] != old_down:
+        name = {"CUT":"cut_down","AVERAGE":"average_down","STOP_ONLY":None}[d["down_mode"]]
+        if name: d[name] = deepcopy(presets[name])
+    if d["up_mode"] != old_up:
+        name = {"TAKE_PROFIT":"take_profit","ADD_UP":"add_up","TARGET_ONLY":None}[d["up_mode"]]
+        if name: d[name] = deepcopy(presets[name])
+    print("\nCURRENT LEVELS (first buy price used as reference):")
+    show(d, 100)
+    if _yes("\nCustomize the stages and their percentages?"):
+        _custom_levels(d,"down")
+        _custom_levels(d,"up")
+    if _yes("Change final stop-loss or target percentages?"):
+        d["stop_pct"] = _number("  Final stop below first buy (%)", d["stop_pct"])
+        d["target_pct"] = _number("  Final target above first buy (%)", d["target_pct"])
+    if _yes("Change initial budget, buy addition budget, or total limit?"):
+        d["initial_budget_inr"] = _number("  First buy budget (INR)", d["initial_budget_inr"])
+        d["extra_budget_inr"] = _number("  Each additional buy budget (INR)", d["extra_budget_inr"])
+        d["total_buy_cap_inr"] = _number("  Maximum total planned buying (INR)", d["total_buy_cap_inr"])
+    d["execution_enabled"] = False
+    valid(d)
+    print("\n===== REVIEW BEFORE SAVING =====")
+    show(d, 100)
+    if not _yes("\nSave this TEST-only strategy?"):
+        print("Not saved; previous settings retained.")
+        return
+    FILE.parent.mkdir(parents=True,exist_ok=True)
+    FILE.parent.chmod(0o700)
+    tmp=FILE.with_suffix(".tmp")
+    tmp.write_text(json.dumps(d,indent=2)+"\n")
+    tmp.chmod(0o600)
+    tmp.replace(FILE)
+    print("\nSAVED:",FILE,"| EXECUTION DISABLED")
+
 if __name__=='__main__':
     command=sys.argv[1] if len(sys.argv)>1 else 'show'
     if command=='self-test':test()
+    elif command=='easy':easy(load())
     elif command in ('show','configure'):
         d=load()
         if command=='configure':d=edits(d)
         first=float(sys.argv[2]) if len(sys.argv)>2 and command=='show' else 100
         if not math.isfinite(first) or first<=0:raise SystemExit('First fill must be positive')
         show(d,first)
-    else:raise SystemExit('Usage: resultbot strategy [show [first_fill_price] | configure | self-test]')
+    else:raise SystemExit('Usage: resultbot strategy [easy | show [first_fill_price] | configure | self-test]')
