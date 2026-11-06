@@ -191,8 +191,10 @@ class RealEquityAmoTests(unittest.TestCase):
             {"orderId":OID,"orderStatus":"PENDING"},
             {"orderId":str(int(OID)+1),"orderStatus":"PENDING"},
         ]
-        with patch.object(live,"_dhan_http",side_effect=broker_replies) as broker, \\
-             patch.object(live,"_verify_owned_order",return_value=fake_broker_order()):
+        with (
+            patch.object(live,"_dhan_http",side_effect=broker_replies) as broker,
+            patch.object(live,"_verify_owned_order",return_value=fake_broker_order()),
+        ):
             first=live.reserve("TEST",302,"YESBANK",int(time.time()))
             live.execute(first)
             second=live.reserve("TEST",303,"TRIDENT",int(time.time()))
@@ -208,9 +210,10 @@ class RealEquityAmoTests(unittest.TestCase):
         ident=self.reserved()
         live._update(ident,"ACKED",order_id=OID,security_id="1333",
                      qty=5,price=20.0,broker_status="PENDING",cancel_after=1)
-        with patch.object(live,"_verify_owned_order",
-                          return_value=fake_broker_order()), \\
-             patch.object(live,"request_cancel") as cancel:
+        with (
+            patch.object(live,"_verify_owned_order",return_value=fake_broker_order()),
+            patch.object(live,"request_cancel") as cancel,
+        ):
             live.monitor()
             cancel.assert_not_called()
         self.assertEqual(live._intent(ident)["state"],"ACKED")
