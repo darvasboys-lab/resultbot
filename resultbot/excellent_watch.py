@@ -272,6 +272,43 @@ def existing_telegram_login():
     return str(value).strip() if value else ""
 
 
+def existing_sqlite_login():
+    """Convert the original bot's authorized SQLite session to an in-memory
+    Telethon StringSession. This function reads SQLite in read-only mode and
+    never copies or prints its authentication key or changes .env.
+    """
+    import base64
+    import ipaddress
+    import struct
+    from urllib.parse import quote
+
+    path = Path.home() / "uditbot" / "data" / "tg_userbot.session"
+    if not path.is_file():
+        return ""
+    try:
+        uri = "file:" + quote(str(path), safe="/") + "?mode=ro"
+        with sqlite3.connect(uri, uri=True, timeout=5) as conn:
+            row = conn.execute(
+                "SELECT dc_id, server_address, port, auth_key "
+                "FROM sessions LIMIT 1"
+            ).fetchone()
+        if not row:
+            raise ValueError("empty sessions table")
+        dc, address, port, key = row
+        key_bytes = bytes(key)
+        if len(key_bytes) != 256:
+            raise ValueError("invalid session authentication key length")
+        packed_ip = ipaddress.ip_address(str(address)).packed
+        fmt = ">B4sH256s" if len(packed_ip) == 4 else ">B16sH256s"
+        encoded = struct.pack(fmt, int(dc), packed_ip, int(port), key_bytes)
+        return "1" + base64.urlsafe_b64encode(encoded).decode("ascii")
+    except (OSError, sqlite3.Error, ValueError, TypeError, struct.error) as exc:
+        raise RuntimeError(
+            "Existing ~/uditbot/data/tg_userbot.session could not be read; "
+            "credentials were not changed"
+        ) from exc
+
+
 def require_trading_inactive():
     """Fail closed before sharing an existing Telegram authorization."""
     import subprocess
@@ -298,26 +335,45 @@ async def telegram_client():
         raise RuntimeError("Telethon missing from venv") from e
     api_id, api_hash = env_config()
     ROOT.mkdir(mode=0o700, parents=True, exist_ok=True)
-    reused = existing_telegram_login()
-    if reused:
-        # Reuse login only while the original bot is not running. Never prompt OTP.
+    saved_login = existing_telegram_login()
+    sqlite_login = existing_sqlite_login()
+    # Prefer an already configured portable session; fall back to the original
+    # authenticated SQLite session, never requiring another Telegram login.
+    # Only one authorization is connected at a time.
+    client = None
+    for source, token in (
+        ("TG_SESSION_STRING", saved_login),
+        ("~/uditbot/data/tg_userbot.session", sqlite_login),
+    ):
+        if not token:
+            continue
         require_trading_inactive()
-        client = TelegramClient(StringSession(reused), api_id, api_hash)
-        await client.connect()
-        if not await client.is_user_authorized():
-            await client.disconnect()
-            raise RuntimeError("Saved TG_SESSION_STRING is not authorized; no OTP attempted")
-        print("[TELEGRAM] Using existing ResultBot login; no new OTP required",flush=True)
-    else:
-        # Never unexpectedly ask for OTP during backfill or background listening.
-        # An already-authorized independent session can still be used.
-        client = TelegramClient(str(SESSION), api_id, api_hash)
-        await client.connect()
-        if not await client.is_user_authorized():
-            await client.disconnect()
+        try:
+            candidate = TelegramClient(StringSession(token), api_id, api_hash)
+        except (ValueError, TypeError):
+            LOG.warning("Stored %s format is invalid; checking next local session", source)
+            continue
+        await candidate.connect()
+        if await candidate.is_user_authorized():
+            client = candidate
+            print(f"[TELEGRAM] Reusing authenticated {source}; no OTP required", flush=True)
+            break
+        await candidate.disconnect()
+        LOG.warning("Stored %s is not authorized; checking next local session", source)
+
+    if client is None:
+        # An independent session may already have been authorized; do not prompt.
+        candidate = TelegramClient(str(SESSION), api_id, api_hash)
+        await candidate.connect()
+        if await candidate.is_user_authorized():
+            client = candidate
+            print("[TELEGRAM] Using previously authorized independent session",flush=True)
+        else:
+            await candidate.disconnect()
             raise RuntimeError(
-                "No authorized Telegram session found. Export the existing session "
-                "to TG_SESSION_STRING in ~/uditbot/.env; no new OTP was requested."
+                "No authorized Telegram session was found in the original bot "
+                "or the research collector. No OTP was requested. "
+                "Check ~/uditbot/data/tg_userbot.session without sharing credentials."
             )
     entity = await client.get_entity(CHANNEL)
     if int(entity.id) != CHANNEL_ID:
