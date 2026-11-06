@@ -9,6 +9,7 @@ on:
       - "resultbot/equity_amo_preview.py"
       - "resultbot/equity_amo_live.py"
       - "resultbot/amo_panel.py"
+      - "resultbot/install_real_amo.sh"
       - "tests/test_resultbot_real_equity_amo.py"
       - "tests/test_resultbot_equity_amo_preview.py"
       - "tests/test_resultbot_dhan_bridge.py"
@@ -28,6 +29,7 @@ on:
       - "resultbot/equity_amo_preview.py"
       - "resultbot/equity_amo_live.py"
       - "resultbot/amo_panel.py"
+      - "resultbot/install_real_amo.sh"
       - "tests/test_resultbot_real_equity_amo.py"
       - "tests/test_resultbot_equity_amo_preview.py"
       - "tests/test_resultbot_dhan_bridge.py"
@@ -55,6 +57,8 @@ jobs:
         run: python -m py_compile resultbot/excellent_watch.py resultbot/dhan_readonly.py resultbot/dhan_bridge.py resultbot/equity_amo_preview.py resultbot/equity_amo_live.py resultbot/amo_panel.py
       - name: Syntax-check isolated ResultBot token timer installer
         run: bash -n resultbot/install_dhan_autorenew.sh
+      - name: Syntax-check private real AMO panel installer
+        run: bash -n resultbot/install_real_amo.sh
       - name: Verify REAL Equity AMO offline owner-control and broker safety regression
         run: python -m unittest -v tests.test_resultbot_real_equity_amo
       - name: Verify REAL Equity AMO OFF-by-default self-test
