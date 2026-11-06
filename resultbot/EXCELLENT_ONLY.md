@@ -57,7 +57,7 @@ In the **Telegram Test Group only**, send **exactly** these two messages as sepa
 [RBTEST] #ROLEXRINGS - 🌟 Great Results
 ```
 
-Expected: the first produces **one** Telegram Log Group card starting `🧪 RESULTBOT TEST — EXCELLENT ONLY`, with Dhan order `NOT SUBMITTED` and execution price `N/A`. The second produces **no** Log Group notification. Neither creates a real `alerts` row, one-minute research candle, Dhan order or trade. The first message is deduplicated by test-chat/message ID; past test messages are not replayed on restart. Other messages without the exact `[RBTEST]` prefix do nothing.
+Expected: the first produces **one** Telegram Log Group card starting `🧪 RESULTBOT TEST — EXCELLENT ONLY`, with Dhan order `NOT SUBMITTED` and execution price `N/A`. The second produces **no** Log Group notification. Neither creates a real `alerts` row, one-minute research candle, Dhan order or trade. The first message is deduplicated by test-chat/message ID; other messages without the exact `[RBTEST]` prefix do nothing. In addition to live updates, the listener polls the most recent 40 Test Group messages every 30 seconds as a fallback for same-account posts. It accepts only explicitly marked messages whose Telegram timestamp is within the last 15 minutes, so old test history is not replayed. The first scan reports `[TEST SCAN]` with scanned/marked/new counts; thereafter `TEST EXCELLENT` appears when an eligible test is newly queued.
 
 Check local delivery with:
 
