@@ -18,8 +18,8 @@ echo "======================================================"
 "$PY" "$BOT" status-short
 echo
 echo "YES: Keep AMO ON for ALL new eligible Excellent Results alerts."
-echo "     New official Earnings Pulse alerts and explicitly marked owner"
-echo "     Test Group alerts may submit REAL Dhan BUY CNC LIMIT AMOs."
+echo "     New official Earnings Pulse alerts and owner-authored normal"
+echo "     Test Group Excellent messages can submit REAL Dhan BUY CNC LIMIT AMOs."
 echo "     There is NO single-order limit, daily order-count cap or expiry."
 echo "     The existing INR 500 budget remains a PER-ORDER safety setting."
 echo "NO:  Keep AMO OFF until you manually turn it ON again."
@@ -53,8 +53,10 @@ if [[ "$decision" == "YES" ]]; then
     echo "YES / ON: Real Equity AMO stays ON until you choose NO."
     echo "All NEW eligible Earnings Pulse Excellent alerts may create real orders."
     echo "To trigger an owner-only TEST GROUP real order, post this NEW message:"
-    echo "[RBLIVEAMO] #YESBANK - 🏆🔥 Excellent Results"
+    echo "#YESBANK - 🏆🔥 Excellent Results"
+    echo "(The optional [RBLIVEAMO] prefix is also accepted.)"
     echo "Each signal is separately deduplicated and broker-verified."
+    echo "Legacy [RBAMO]/[RBTEST] preview messages NEVER place real orders."
 else
     "$PY" "$BOT" off > /dev/null
     echo "NO / OFF: New Equity AMOs blocked until you choose YES."
