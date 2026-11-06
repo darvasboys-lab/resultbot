@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# ResultBot REAL Equity AMO: owner YES/NO selector. The YES choice arms one
-# real broker order from the next eligible NEW Telegram Test Group message.
-# NO blocks new submissions; it never cancels an existing order.
+# ResultBot Equity AMO persistent owner YES / NO. NO order-count limit.
+# YES authorizes each distinct, NEW eligible Telegram signal while enabled.
+# NO blocks all new submissions, but never cancels existing Dhan orders.
 set -euo pipefail
 D="$HOME/resultbot-data"
 PY="$HOME/uditbot/venv/bin/python"
@@ -15,47 +15,54 @@ fi
 echo "======================================================"
 echo " RESULTBOT — REAL EQUITY AMO YES / NO "
 echo "======================================================"
-"$PY" "$BOT" status
+"$PY" "$BOT" status-short
 echo
-echo "YES: arm ONE real Dhan BUY CNC LIMIT AMO (max INR 500)"
-echo "     Trigger only by a NEW owner message in ResultBot TEST GROUP."
-echo "     Expires in 10 minutes. No order placed by YES alone."
-echo "NO:  block all future AMO submissions until enabled again."
-echo "     Existing Dhan orders are NOT cancelled by NO."
+echo "YES: Keep AMO ON for ALL new eligible Excellent Results alerts."
+echo "     New official Earnings Pulse alerts and explicitly marked owner"
+echo "     Test Group alerts may submit REAL Dhan BUY CNC LIMIT AMOs."
+echo "     There is NO single-order limit, daily order-count cap or expiry."
+echo "     The existing INR 500 budget remains a PER-ORDER safety setting."
+echo "NO:  Keep AMO OFF until you manually turn it ON again."
+echo "     NO does NOT cancel already submitted Dhan AMOs."
+echo "     Use the separate cancel command for selected broker orders."
 echo
 
 decision="NO"
 if [[ -t 0 ]] && command -v whiptail >/dev/null 2>&1; then
-    if whiptail --title "ResultBot: REAL Dhan Equity AMO" \
-        --defaultno --yes-button "YES - Arm 1 real order" \
-        --no-button "NO - Switch OFF" \
-        --yesno "Will the next NEW authorized [RBLIVEAMO] Test Group alert be allowed to submit ONE REAL Dhan Equity AMO (max INR 500, within 10 minutes)?\n\nNO disables future submissions. It does NOT cancel any order already accepted by Dhan." \
-        15 80; then
+    if whiptail --title "ResultBot: REAL Equity AMO" \
+        --defaultno --yes-button "YES - AMO ON" \
+        --no-button "NO - AMO OFF" \
+        --yesno "YES: Keep real Dhan Equity AMO ON until you press NO. Each new eligible Telegram alert can submit a real broker order (INR 500 per-order budget). No order-count limit or automatic expiry.\n\nNO: Stop NEW submissions. Existing broker orders must be cancelled separately by you." \
+        16 82; then
         decision="YES"
     fi
 else
     if [[ ! -t 0 ]]; then
-        echo "Non-interactive terminal: defaulting to NO (safe)."
+        echo "Non-interactive input: choosing NO for safety."
     else
-        read -r -p "Enter YES to arm one REAL AMO, otherwise NO: " choice
+        read -r -p "Turn REAL Equity AMO ON? Type YES or NO: " choice
         if [[ "$choice" == "YES" ]]; then decision="YES"; fi
     fi
 fi
 
 if [[ "$decision" == "YES" ]]; then
-    echo "===== LIVE DHAN ACCOUNT / FUNDS / IP PREFLIGHT ====="
+    echo "===== REAL DHAN ACCOUNT / FUNDS / STATIC-IP PREFLIGHT ====="
     "$PY" "$BOT" preflight
-    "$PY" "$BOT" arm --source TEST --budget 500
+    "$PY" "$BOT" arm --source BOTH --budget 500 > /dev/null
     echo
-    echo "YES: Armed. You must send a NEW owner Telegram message to the ResultBot TEST GROUP:"
+    echo "YES / ON: Real Equity AMO stays ON until you choose NO."
+    echo "All NEW eligible Earnings Pulse Excellent alerts may create real orders."
+    echo "To trigger an owner-only TEST GROUP real order, post this NEW message:"
     echo "[RBLIVEAMO] #YESBANK - 🏆🔥 Excellent Results"
-    echo "This can submit a REAL broker order. A Dhan order ID is not a fill."
+    echo "Each signal is separately deduplicated and broker-verified."
 else
-    "$PY" "$BOT" off
-    echo "NO: New AMO submissions blocked. Existing order cancellation is separate."
+    "$PY" "$BOT" off > /dev/null
+    echo "NO / OFF: New Equity AMOs blocked until you choose YES."
+    echo "Any orders already accepted by Dhan remain active."
 fi
 echo
-echo "Use: $PY $BOT status"
-echo "Request cancellation for a verified ResultBot-owned order:"
-echo "  $PY $BOT cancel --intent-id <number>"
-echo "Then confirm broker CANCELLED status in the Dhan order book."
+"$PY" "$BOT" status-short
+echo "Full order list: $PY $BOT status"
+echo "Request cancellation for an existing resultbot-owned order:"
+echo "  $PY $BOT cancel --intent-id <intent_number>"
+echo "Confirm CANCELLED in Dhan. NO does not cancel live orders."
