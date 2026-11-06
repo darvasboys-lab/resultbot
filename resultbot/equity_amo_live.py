@@ -53,7 +53,10 @@ class LiveAmoError(Exception):
 def connect_db(path: Path | None = None) -> sqlite3.Connection:
     path = STATE_DB if path is None else path
     path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-    path.parent.chmod(0o700)
+    # Harden only ResultBot's owned data directory; never chmod /tmp or
+    # an unrelated caller-provided directory during an isolated self-test.
+    if path.parent == ROOT:
+        path.parent.chmod(0o700)
     if path.is_symlink():
         raise LiveAmoError("Refusing symlinked real-AMO state database")
     con=sqlite3.connect(str(path),timeout=20,isolation_level=None)
