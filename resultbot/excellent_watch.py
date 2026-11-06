@@ -68,6 +68,28 @@ def parse_test_alert(text: str) -> tuple[str | None, str]:
     return parse_alert(text)
 
 
+def eligible_owner_test_amo(raw_text: str, verdict: str,
+                            sender_id: int | None,
+                            owner_id: int | None) -> tuple[str | None,str]:
+    """Route only an owner-authored, newly queued Test Group Excellent alert.
+
+    Ordinary #STOCK Excellent Results is eligible when the persisted master
+    switch is YES. Legacy [RBAMO] preview and [RBTEST] synthetic posts are
+    NEVER real broker triggers even when YES. Replays/duplicate log rows
+    are never upgraded into broker submissions on a process restart.
+    """
+    if verdict != "test_queued":
+        return None, "not_new_test_alert"
+    if owner_id is None or sender_id is None or int(sender_id) != int(owner_id):
+        return None, "not_owner"
+    if raw_text.startswith(("[RBAMO] ", "[RBTEST] ")):
+        return None, "legacy_simulation_only"
+    if raw_text.startswith("[") and not raw_text.startswith("[RBLIVEAMO] "):
+        return None, "unknown_test_prefix"
+    symbol,reason=parse_test_alert(raw_text)
+    return (symbol,reason) if symbol is not None else (None,reason)
+
+
 def setup_db(path: Path = DB) -> sqlite3.Connection:
     path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     try:
@@ -187,9 +209,9 @@ def format_test_log(symbol: str, alert_utc: int) -> str:
         "📩 Source: Authorized ResultBot TEST GROUP (not Earnings Pulse)",
         f"🕒 Test message: {when}",
         "✅ Test-group Excellent filter: PASSED",
-        "🏦 Dhan order: NOT SUBMITTED",
-        "💰 Execution price: N/A",
-        "🚫 NOT A REAL EARNINGS ALERT — no orders, no price research",
+        "🏦 This is only a Telegram receipt; verify broker order in a separate AMO card",
+        "💰 Execution price: N/A in this receipt",
+        "🚫 NOT AN EARNINGS PULSE ALERT — Test Group only",
     ))
 
 
@@ -679,7 +701,7 @@ async def listen(con: sqlite3.Connection, *, interval: int = 75):
         try:
             import equity_amo_live as amo_module
             amo_module.connect_db().close()
-            LOG.info("Real Equity AMO one-shot module loaded (OFF by default)")
+            LOG.info("Real Equity AMO persistent YES/NO module loaded (reads owner switch from SQLite)")
         except (ImportError,OSError,sqlite3.Error) as exc:
             amo_module=None
             LOG.warning("Real AMO disabled; research listener unaffected: %s",type(exc).__name__)
@@ -693,7 +715,12 @@ async def listen(con: sqlite3.Connection, *, interval: int = 75):
             LOG.warning("Owner-armed AMO reservation blocked: %s",type(exc).__name__)
             return
         if reserved is None:
+            LOG.info("REAL AMO NOT RESERVED: source=%s message=%d; "
+                     "check persisted ON, source, message freshness or deduplication",
+                     source,int(msg.id))
             return
+        LOG.info("REAL AMO RESERVED: source=%s message=%d intent=%d",
+                 source,int(msg.id),int(reserved))
         # Network work must never block the Telethon update loop.
         task=asyncio.create_task(asyncio.to_thread(amo_module.execute,reserved))
         live_tasks.add(task)
@@ -735,19 +762,23 @@ async def listen(con: sqlite3.Connection, *, interval: int = 75):
             )
             if verdict == "test_queued":
                 print(
-                    f"[TEST EXCELLENT] {source}: queued for Log Group (no broker actions)",
+                    f"[TEST EXCELLENT] {source}: signal receipt queued (broker path checked separately)",
                     flush=True,
                 )
             elif verdict not in ("not_excellent", "duplicate"):
                 LOG.info("Test Group message ignored (%s): %s", source, verdict)
             raw = message.raw_text or ""
-            if raw.startswith("[RBLIVEAMO] "):
-                sender = getattr(message,"sender_id",None)
-                if owner_tg_id is not None and sender is not None and int(sender)==owner_tg_id:
-                    symbol,_=parse_test_alert(raw)
-                    maybe_real_amo("TEST",message,symbol)
-                else:
-                    LOG.warning("Real-AMO Test Group command rejected: not the owner account")
+            sender = getattr(message,"sender_id",None)
+            # Ordinary Excellent-only Test Group text is a REAL AMO candidate
+            # when owner master YES is active. No [RBLIVEAMO] prefix is required.
+            # Only newly queued messages by this authenticated Telegram user
+            # can enter the order path. History/replays never become orders.
+            symbol,reason=eligible_owner_test_amo(raw,verdict,sender,owner_tg_id)
+            if symbol is not None:
+                maybe_real_amo("TEST",message,symbol)
+            elif verdict=="test_queued":
+                LOG.info("REAL AMO TEST SKIPPED: reason=%s message=%d",
+                         reason,int(message.id))
             return verdict
 
         async def test_handler(event):
@@ -802,7 +833,7 @@ async def listen(con: sqlite3.Connection, *, interval: int = 75):
         except OSError as e:
             LOG.warning("Backfill retry %d: %s", attempt+1,e)
             await asyncio.sleep(3)
-    print("[LISTEN] @earnings_pulse | Excellent Results; REAL AMO only with owner WebUI ON",flush=True)
+    print("[LISTEN] @earnings_pulse | Excellent Results; REAL AMO requires owner terminal YES",flush=True)
     async def log_poller():
         while True:
             try:
@@ -911,7 +942,7 @@ def main():
     ap=argparse.ArgumentParser(description="ResultBot Excellent-only research. No Dhan or trading functions.")
     sub=ap.add_subparsers(dest="cmd", required=True)
     sub.add_parser("self-test")
-    sub.add_parser("listen",help="read-only Telegram listener + weekday market-hour Yahoo research")
+    sub.add_parser("listen",help="Telegram listener, Yahoo research and optional owner-enabled real Equity AMO")
     sub.add_parser("log-status",help="local Excellent Log Group queue status; no messages sent")
     p=sub.add_parser("backfill",help="read-only Telegram history scan, Excellent only")
     p.add_argument("--limit",type=int,default=2000)
@@ -950,7 +981,7 @@ def main():
             test_configured = False
         print("TEST GROUP configured:", "YES" if test_configured else "NO")
         print("Only new Excellent alerts generate cards; history and all other ratings stay silent.")
-        print("Dhan research bridge: GET-only; REAL Equity AMO requires explicit private owner WebUI ON.")
+        print("Dhan research bridge: GET-only; REAL Equity AMO follows the persistent terminal YES/NO master switch.")
     con.close()
 
 
