@@ -680,8 +680,9 @@ async def listen(con: sqlite3.Connection, *, interval: int = 75):
             import equity_amo_live as amo_module
             amo_module.connect_db().close()
             LOG.info("Real Equity AMO one-shot module loaded (OFF by default)")
-        except ImportError:
-            LOG.info("Real Equity AMO module not installed; research-only listener")
+        except (ImportError,OSError,sqlite3.Error) as exc:
+            amo_module=None
+            LOG.warning("Real AMO disabled; research listener unaffected: %s",type(exc).__name__)
 
     def maybe_real_amo(source, msg, symbol):
         if amo_module is None or not symbol:
@@ -722,8 +723,12 @@ async def listen(con: sqlite3.Connection, *, interval: int = 75):
     if test_entity is not None:
         # Only a message posted by the authenticated Telegram account that
         # runs this listener may trigger a real Test Group AMO.
-        me = await client.get_me()
-        owner_tg_id = int(me.id)
+        try:
+            me=await client.get_me()
+            owner_tg_id=int(me.id) if me is not None else None
+        except Exception:
+            owner_tg_id=None
+            LOG.warning("Cannot verify Telegram account identity; real AMO Test Group commands disabled")
         def record_test_message(message, source: str) -> str:
             verdict = enqueue_test_log(
                 con, test_id, message.id, message.date, message.raw_text or ""
@@ -738,7 +743,7 @@ async def listen(con: sqlite3.Connection, *, interval: int = 75):
             raw = message.raw_text or ""
             if raw.startswith("[RBLIVEAMO] "):
                 sender = getattr(message,"sender_id",None)
-                if sender is not None and int(sender)==owner_tg_id:
+                if owner_tg_id is not None and sender is not None and int(sender)==owner_tg_id:
                     symbol,_=parse_test_alert(raw)
                     maybe_real_amo("TEST",message,symbol)
                 else:
@@ -945,7 +950,7 @@ def main():
             test_configured = False
         print("TEST GROUP configured:", "YES" if test_configured else "NO")
         print("Only new Excellent alerts generate cards; history and all other ratings stay silent.")
-        print("Dhan orders are never placed here; only explicitly linked orders receive broker-verified updates.")
+        print("Dhan research bridge: GET-only; REAL Equity AMO requires explicit private owner WebUI ON.")
     con.close()
 
 
