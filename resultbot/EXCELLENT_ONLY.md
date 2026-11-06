@@ -24,7 +24,7 @@ venv/bin/python ~/resultbot-data/excellent_watch.py report --limit 25
 venv/bin/python ~/resultbot-data/excellent_watch.py listen
 ```
 
-`backfill` and `listen` use an **independent Telethon session** `~/resultbot-data/excellent_telegram.session` to avoid locking the main bot's session file. The first run may ask for Telegram phone, OTP and 2FA; do this in the VM terminal before running as a systemd user service. This session contains login credentials and must never be committed or pasted into chat. Do not run `backfill` while `listen` uses that same session.
+`backfill` and `listen` **reuse the existing portable `TG_SESSION_STRING`** from `~/uditbot/.env` when available, so no second Telegram login is required. This is allowed only when `trading_bot.service` is verifiably inactive/failed; an active or unknown trading-service state blocks session reuse, and the `listen` watchdog disconnects within a few seconds if that state changes. Stop the research listener before intentionally starting trading. Sharing a StringSession is not suitable for two concurrent listeners. If `TG_SESSION_STRING` is absent, the collector uses its **independent Telethon session** `~/resultbot-data/excellent_telegram.session`, and that first run may request phone, OTP and 2FA. Never commit or paste either session secret. Do not run `backfill` while `listen` is connected with the same login.
 
 Runtime database: `~/resultbot-data/excellent_watch.sqlite3` (does not overwrite pre-existing `alerts.sqlite3`). It contains historical message text and price bars; it is excluded from GitHub by being outside the repository.
 
