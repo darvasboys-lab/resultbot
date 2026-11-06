@@ -1,0 +1,403 @@
+#!/usr/bin/env python3
+"""ResultBot Excellent Results: read-only Telegram collection + verifiable 1m Yahoo research.
+
+This module contains NO Dhan imports, order entry, trading-engine imports or Telegram send.
+It never runs the trading_bot.service and never trades.
+"""
+from __future__ import annotations
+
+import argparse
+import asyncio
+import json
+import logging
+import math
+import os
+import re
+import sqlite3
+import sys
+import time
+from datetime import datetime, timezone
+from pathlib import Path
+from urllib.error import HTTPError, URLError
+from urllib.parse import quote, urlencode
+from urllib.request import Request, urlopen
+from zoneinfo import ZoneInfo
+
+LOG = logging.getLogger("excellent")
+IST = ZoneInfo("Asia/Kolkata")
+ROOT = Path.home() / "resultbot-data"
+DB = ROOT / "excellent_watch.sqlite3"
+SESSION = ROOT / "excellent_telegram"  # independent: no reuse of trading bot's session filename
+CHANNEL = "earnings_pulse"
+CHANNEL_ID = 2457353254
+EXCELLENT = re.compile(r"\bexcellent\s+results?\b", re.IGNORECASE)
+HASH = re.compile(r"(?<!\w)#([A-Za-z][A-Za-z0-9&._-]{0,29})\b")
+FIELDS = ("open", "high", "low", "close")
+CANDLES_MAX_DAYS = 5  # window queried with 1m chart; not a promise of availability
+
+
+def parse_alert(text: str) -> tuple[str | None, str]:
+    """Only unambiguous #STOCK - Excellent Results; never Great/Good/Weak."""
+    if not isinstance(text, str) or not EXCELLENT.search(text):
+        return None, "not_excellent"
+    # Require a single stock hashtag, not unrelated multi-company posts.
+    symbols = [m.upper() for m in HASH.findall(text)]
+    unique = sorted(set(symbols))
+    if len(unique) != 1:
+        return None, "missing_or_multiple_stock_symbols"
+    symbol = unique[0]
+    if symbol in ("NIFTY", "BANKNIFTY", "SENSEX"):
+        return None, "index_not_equity"
+    return symbol, "excellent"
+
+
+def setup_db(path: Path = DB) -> sqlite3.Connection:
+    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    try:
+        path.parent.chmod(0o700)
+    except OSError:
+        pass
+    con = sqlite3.connect(str(path), timeout=10, isolation_level=None)
+    con.execute("PRAGMA busy_timeout=10000")
+    con.execute("PRAGMA journal_mode=WAL")
+    con.executescript("""
+      CREATE TABLE IF NOT EXISTS alerts (
+        id INTEGER PRIMARY KEY,
+        channel_id INTEGER NOT NULL,
+        message_id INTEGER NOT NULL,
+        symbol TEXT NOT NULL,
+        sent_utc INTEGER NOT NULL,
+        inserted_utc INTEGER NOT NULL,
+        text TEXT NOT NULL,
+        UNIQUE(channel_id, message_id)
+      );
+      CREATE INDEX IF NOT EXISTS alert_symbol_time ON alerts(symbol, sent_utc);
+      CREATE TABLE IF NOT EXISTS one_minute_bars (
+        symbol TEXT NOT NULL,
+        ts_utc INTEGER NOT NULL,
+        open REAL NOT NULL,
+        high REAL NOT NULL,
+        low REAL NOT NULL,
+        close REAL NOT NULL,
+        volume INTEGER,
+        fetched_utc INTEGER NOT NULL,
+        PRIMARY KEY(symbol, ts_utc)
+      );
+      CREATE INDEX IF NOT EXISTS bars_by_time ON one_minute_bars(ts_utc);
+      CREATE TABLE IF NOT EXISTS fetch_status (
+        symbol TEXT PRIMARY KEY,
+        status TEXT NOT NULL,
+        checked_utc INTEGER NOT NULL,
+        details TEXT NOT NULL
+      );
+    """)
+    return con
+
+
+def add_alert(con: sqlite3.Connection, message_id: int, sent_dt: datetime, text: str, channel_id: int = CHANNEL_ID) -> str:
+    if abs(int(channel_id)) not in (CHANNEL_ID, int(f"100{CHANNEL_ID}")):
+        return "wrong_channel"
+    symbol, reason = parse_alert(text)
+    if not symbol:
+        return reason
+    if sent_dt.tzinfo is None:
+        raise ValueError("Telegram timestamp must be timezone-aware")
+    cur = con.execute("""INSERT OR IGNORE INTO alerts
+        (channel_id,message_id,symbol,sent_utc,inserted_utc,text) VALUES (?,?,?,?,?,?)""",
+        (CHANNEL_ID, int(message_id), symbol, int(sent_dt.timestamp()), int(time.time()), text[:4000]))
+    return "stored" if cur.rowcount else "duplicate"
+
+
+def request_bars(symbol: str, timeout: int = 12) -> list[dict]:
+    """Return *completed*, provider-timestamped NSE 1m candles, or fail closed."""
+    if not re.fullmatch(r"[A-Z][A-Z0-9&._-]{0,29}", symbol):
+        raise ValueError("Invalid symbol")
+    ticker = symbol + ".NS"
+    query = urlencode({"interval": "1m", "range": "5d"})
+    url = f"https://query1.finance.yahoo.com/v8/finance/chart/{quote(ticker, safe='')}?{query}"
+    req = Request(url, headers={"User-Agent": "Mozilla/5.0 ResultBot-Research/1.0", "Accept": "application/json"})
+    with urlopen(req, timeout=timeout) as reply:
+        data = json.load(reply)
+    chart = data.get("chart") or {}
+    results = chart.get("result") or []
+    if not results:
+        raise ValueError(f"No Yahoo chart for {ticker}: {str(chart.get('error'))[:180]}")
+    result = results[0]
+    meta = result.get("meta") or {}
+    returned = str(meta.get("symbol", "")).upper()
+    if returned != ticker.upper() or meta.get("currency") != "INR":
+        raise ValueError(f"Yahoo identity mismatch: asked={ticker}, returned={returned}, currency={meta.get('currency')}")
+    quotes = (result.get("indicators") or {}).get("quote") or []
+    if not quotes:
+        raise ValueError("Yahoo returned no quote arrays")
+    quoted = quotes[0]
+    out = []
+    now = time.time()
+    for i, ts in enumerate(result.get("timestamp") or []):
+        try:
+            values = {k: float(quoted[k][i]) for k in FIELDS}
+            if not all(math.isfinite(v) and v > 0 for v in values.values()):
+                continue
+            ts = int(ts)
+            # Exclude not-yet-closed minute to prevent use of moving candles.
+            if ts + 60 > now + 1:
+                continue
+            ist = datetime.fromtimestamp(ts, IST)
+            if ist.weekday() >= 5 or not (9 * 60 + 15 <= ist.hour*60 + ist.minute < 15*60 + 30):
+                continue
+            if values["high"] < values["low"] or not values["low"] <= values["close"] <= values["high"]:
+                continue
+            v = quoted.get("volume") or []
+            vol = v[i] if i < len(v) and isinstance(v[i], (float, int)) and v[i] >= 0 else None
+            out.append({"symbol": symbol, "ts_utc": ts, **values,
+                        "volume": int(vol) if vol is not None else None, "fetched_utc": int(now)})
+        except (TypeError, ValueError, KeyError, IndexError):
+            continue
+    return out
+
+
+def store_bars(con: sqlite3.Connection, symbol: str, bars: list[dict]) -> int:
+    rows = [(symbol,b["ts_utc"],b["open"],b["high"],b["low"],b["close"],b["volume"],b["fetched_utc"]) for b in bars]
+    # Preserve first saved completed candle, never replace historic values with later vendor revisions.
+    con.executemany("""INSERT OR IGNORE INTO one_minute_bars
+      (symbol, ts_utc, open, high, low, close, volume, fetched_utc) VALUES (?,?,?,?,?,?,?,?)""", rows)
+    return len(rows)
+
+
+def track_once(con: sqlite3.Connection, *, now: int | None = None) -> tuple[int, int]:
+    """Only request symbols with recent Excellent alerts. Not all market symbols."""
+    now = int(now or time.time())
+    earliest = now - 5 * 86400
+    symbols = [row[0] for row in con.execute("SELECT DISTINCT symbol FROM alerts WHERE sent_utc>=?", (earliest,))]
+    worked = 0
+    for symbol in symbols:
+        # Respect free-data endpoint and give delayed minute bars time to settle.
+        last = con.execute("SELECT checked_utc FROM fetch_status WHERE symbol=?", (symbol,)).fetchone()
+        if last and now - int(last[0]) < 180:
+            continue
+        try:
+            bars = request_bars(symbol)
+            n = store_bars(con, symbol, bars)
+            con.execute("REPLACE INTO fetch_status VALUES (?,?,?,?)", (symbol, "OK" if n else "NO_BARS", now, f"candles={n}"))
+            worked += 1
+        except (HTTPError, URLError, OSError, ValueError, TimeoutError) as e:
+            con.execute("REPLACE INTO fetch_status VALUES (?,?,?,?)", (symbol, "UNAVAILABLE", now, str(e)[:250]))
+            LOG.warning("Price unavailable for %s: %s", symbol, str(e)[:160])
+    return worked, len(symbols)
+
+
+def poll_new_db_connection() -> tuple[int,int]:
+    """SQLite connections must be created inside the polling thread."""
+    con=setup_db()
+    try:
+        return track_once(con)
+    finally:
+        con.close()
+
+
+def same_session(ts1: int, ts2: int) -> bool:
+    return datetime.fromtimestamp(ts1, IST).date() == datetime.fromtimestamp(ts2, IST).date()
+
+
+def summarize(con: sqlite3.Connection, alert_id: int) -> dict:
+    row = con.execute("SELECT symbol, sent_utc, message_id FROM alerts WHERE id=?", (alert_id,)).fetchone()
+    if not row:
+        raise ValueError("Missing alert")
+    sym, alert_ts, message_id = row
+    # A 1-minute bar spans [ts, ts+60); require open >= alert time, and
+    # strictly later than the alert's minute (pre-alert trades may share that minute).
+    first_possible = (alert_ts//60 + 1)*60
+    first = con.execute("""SELECT ts_utc,close FROM one_minute_bars WHERE symbol=? AND ts_utc>=?
+      AND ts_utc<=? ORDER BY ts_utc LIMIT 1""", (sym, first_possible, alert_ts + 5*86400)).fetchone()
+    d = {"symbol": sym, "message_id": message_id, "alert_utc": alert_ts,
+         "first_bar_utc": None, "first_price": None, "status": "NO_VERIFIED_POST_ALERT_CANDLE"}
+    if first is None:
+        return d
+    first_ts, first_price = first
+    d.update(first_bar_utc=first_ts, first_price=first_price, status="VERIFIED_1M_CANDLE")
+    # Only same market session, only first 60 minutes after first price observation.
+    rows = [r for r in con.execute("""SELECT ts_utc,low,high,close FROM one_minute_bars
+      WHERE symbol=? AND ts_utc>=? AND ts_utc<=? ORDER BY ts_utc""",
+      (sym, first_ts, first_ts+3600)) if same_session(first_ts, r[0])]
+    d["observed_low_pct"] = round((min(r[1] for r in rows)/first_price-1)*100, 3)
+    d["observed_high_pct"] = round((max(r[2] for r in rows)/first_price-1)*100, 3)
+    for minutes in (5, 15, 30, 60):
+        # First completed candle AT/AFTER milestone, at most 2 min late.
+        candidates = [r for r in rows if first_ts + minutes*60 <= r[0] <= first_ts+(minutes+2)*60]
+        d[f"return_{minutes}m_pct"] = round((candidates[0][3]/first_price-1)*100, 3) if candidates else None
+    d["observed_bars"] = len(rows)
+    return d
+
+
+def report(con: sqlite3.Connection, limit: int = 25) -> None:
+    total = con.execute("SELECT count(*) FROM alerts").fetchone()[0]
+    print(f"RESULTBOT / EXCELLENT ONLY / RESEARCH MODE  |  stored alerts: {total}")
+    print("Return is from FIRST verified post-alert 1m CLOSE, not Telegram arrival price.")
+    print("1m bar containing the alert is excluded. A missing return means NOT VERIFIED.")
+    print("Prices are delayed/retrospective research candles, NOT executable entry quotes.")
+    for (alert_id,) in con.execute("SELECT id FROM alerts ORDER BY sent_utc DESC LIMIT ?", (limit,)):
+        d = summarize(con, alert_id)
+        t = datetime.fromtimestamp(d["alert_utc"], IST).strftime("%Y-%m-%d %H:%M")
+        first = f'₹{d["first_price"]:.2f}' if d["first_price"] is not None else "MISSING"
+        ret = [f"{m}m={'N/A' if d.get(f'return_{m}m_pct') is None else str(d[f'return_{m}m_pct'])+'%'}" for m in (5,15,30,60)]
+        if d["first_bar_utc"] is not None:
+            first_when=datetime.fromtimestamp(d["first_bar_utc"],IST).strftime("%d-%b %H:%M IST")
+            range_text=f" | observed low={d['observed_low_pct']:+.2f}% high={d['observed_high_pct']:+.2f}%"
+        else:
+            first_when="NO POST-ALERT BAR"
+            range_text=""
+        print(f"{t} IST  #{d['symbol']:<14} first={first:<11} [{first_when}] {'  '.join(ret)}{range_text}")
+
+
+def env_config() -> tuple[int,str]:
+    """Only Telegram keys read; no Dhan credentials or trading settings used."""
+    try:
+        from dotenv import dotenv_values
+    except ImportError as e:
+        raise RuntimeError("Missing python-dotenv in venv") from e
+    # Read Telegram keys only; do not inject broker secrets into this process.
+    values = dotenv_values(Path.home()/"uditbot"/".env")
+    api_id = os.environ.get("TG_API_ID") or values.get("TG_API_ID") or values.get("API_ID")
+    api_hash = os.environ.get("TG_API_HASH") or values.get("TG_API_HASH") or values.get("API_HASH")
+    if not api_id or not api_hash:
+        raise RuntimeError("Missing TG_API_ID/TG_API_HASH in ~/uditbot/.env")
+    return int(api_id), api_hash
+
+
+async def telegram_client():
+    try:
+        from telethon import TelegramClient
+    except ImportError as e:
+        raise RuntimeError("Telethon missing from venv") from e
+    api_id, api_hash = env_config()
+    ROOT.mkdir(mode=0o700, parents=True, exist_ok=True)
+    # Uses its own session file; prompts once if ResultBot Excellent has not logged in.
+    client = TelegramClient(str(SESSION), api_id, api_hash)
+    await client.start()
+    entity = await client.get_entity(CHANNEL)
+    if int(entity.id) != CHANNEL_ID:
+        await client.disconnect()
+        raise RuntimeError(f"Unexpected Earnings Pulse source identity: {entity.id} != {CHANNEL_ID}")
+    return client, entity
+
+
+async def backfill(con: sqlite3.Connection, limit: int):
+    client, entity = await telegram_client()
+    counts = {}
+    try:
+        async for m in client.iter_messages(entity, limit=limit):
+            result = add_alert(con, m.id, m.date, m.raw_text or "", channel_id=entity.id)
+            counts[result] = counts.get(result,0)+1
+    finally:
+        await client.disconnect()
+    print("Backfill (no broker calls):",counts)
+
+
+async def listen(con: sqlite3.Connection, *, interval: int = 75):
+    from telethon import events
+    client, entity = await telegram_client()
+    # Backfill a small gap on startup to recover missed messages, deduped by Telegram ID.
+    async def handler(event):
+        m = event.message
+        verdict = add_alert(con, m.id, m.date, m.raw_text or "", channel_id=entity.id)
+        if verdict == "stored":
+            symbol, _ = parse_alert(m.raw_text or "")
+            print(f"[EXCELLENT STORED] #{symbol}  telegram_id={m.id}  {m.date.isoformat()}",flush=True)
+        elif verdict == "missing_or_multiple_stock_symbols":
+            LOG.warning("Excellent message %s needs manual stock-symbol review", m.id)
+
+    client.add_event_handler(handler, events.NewMessage(chats=entity))
+    for attempt in range(4):
+        try:
+            async for m in client.iter_messages(entity, limit=30):
+                add_alert(con, m.id, m.date, m.raw_text or "", channel_id=entity.id)
+            break
+        except OSError as e:
+            LOG.warning("Backfill retry %d: %s", attempt+1,e)
+            await asyncio.sleep(3)
+    print("[LISTEN] @earnings_pulse | ONLY Excellent Results | no order execution",flush=True)
+    async def price_poller():
+        while True:
+            now = datetime.now(IST)
+            # Market days and clock time, NOT a guarantee exchange is open (holiday possible).
+            if now.weekday()<5 and (9*60+16)<=now.hour*60+now.minute<15*60+35:
+                worked, candidates = await asyncio.to_thread(poll_new_db_connection)
+                if candidates:
+                    LOG.info("Verified Yahoo NSE candles: %d/%d symbols",worked,candidates)
+            await asyncio.sleep(interval)
+    poll = asyncio.create_task(price_poller())
+    try:
+        await client.run_until_disconnected()
+    finally:
+        poll.cancel()
+        await client.disconnect()
+
+
+def self_test() -> None:
+    import tempfile
+    examples = {
+        "#ROLEXRINGS - 🏆🔥 Excellent Results": ("ROLEXRINGS","excellent"),
+        "#SIGMAADV - 🌟 Great Results": (None,"not_excellent"),
+        "#TEST - Good Results": (None,"not_excellent"),
+        "#AAA #BBB - Excellent Results": (None,"missing_or_multiple_stock_symbols"),
+        "Results Out #SGFIN": (None,"not_excellent"),
+        "Excellent Results": (None,"missing_or_multiple_stock_symbols"),
+    }
+    for msg, expected in examples.items():
+        assert parse_alert(msg) == expected,(msg,parse_alert(msg))
+    with tempfile.TemporaryDirectory() as d:
+        con=setup_db(Path(d)/"test.db")
+        t=datetime(2026,11,6,8,0,tzinfo=timezone.utc)
+        assert add_alert(con,100,t,"#ROLEXRINGS - Excellent Results") == "stored"
+        assert add_alert(con,100,t,"#ROLEXRINGS - Excellent Results") == "duplicate"
+        assert add_alert(con,101,t,"#SIGMAADV Great Results") == "not_excellent"
+        assert add_alert(con,102,t,"#ROLEXRINGS Excellent Results",channel_id=999) == "wrong_channel"
+        symbol="ROLEXRINGS"; ts=int(t.timestamp()); start=(ts//60+1)*60
+        # Same-minute bar excluded. Exact first eligible 1m bar and post-alert outcomes used.
+        bars=[]
+        for i in range(64):
+            price=100+i*0.1
+            bars.append({"symbol":symbol,"ts_utc":start+i*60,"open":price,"high":price+0.2,
+                         "low":price-0.2,"close":price,"volume":100,"fetched_utc":int(time.time())})
+        store_bars(con,symbol,bars)
+        before={"symbol":symbol,"ts_utc":ts,"open":50,"high":80,"low":40,"close":50,
+                "volume":100,"fetched_utc":int(time.time())}
+        store_bars(con,symbol,[before])
+        s=summarize(con,1)
+        assert s["first_price"]==100.0,s
+        assert s["return_5m_pct"] == 0.5,s
+        assert s["observed_high_pct"] < 7,s
+        con.close()
+    print("PASS: strict Excellent classification; source gate; dedup; first-post-alert exclusion; 1m returns")
+
+
+def main():
+    ap=argparse.ArgumentParser(description="ResultBot Excellent-only research. No Dhan or trading functions.")
+    sub=ap.add_subparsers(dest="cmd", required=True)
+    sub.add_parser("self-test")
+    sub.add_parser("listen",help="read-only Telegram listener + weekday market-hour Yahoo research")
+    p=sub.add_parser("backfill",help="read-only Telegram history scan, Excellent only")
+    p.add_argument("--limit",type=int,default=2000)
+    sub.add_parser("prices",help="one-time Yahoo minute-bar retrieval for recently seen Excellent alerts")
+    p=sub.add_parser("report",help="summarize first-post-alert observed prices")
+    p.add_argument("--limit",type=int,default=25)
+    args=ap.parse_args()
+    logging.basicConfig(level=logging.INFO,format="%(asctime)s %(levelname)s %(message)s")
+    if args.cmd=="self-test":
+        self_test();return
+    con=setup_db()
+    if args.cmd=="backfill":
+        if not 1<=args.limit<=10000:ap.error("--limit range 1..10000")
+        asyncio.run(backfill(con,args.limit))
+    elif args.cmd=="listen":
+        asyncio.run(listen(con))
+    elif args.cmd=="prices":
+        done, all_=track_once(con)
+        print(f"Yahoo 1m requests: completed={done}; candidates={all_}")
+    elif args.cmd=="report":
+        report(con,args.limit)
+    con.close()
+
+
+if __name__=="__main__":
+    main()
