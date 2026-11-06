@@ -66,7 +66,7 @@ class RealEquityAmoTests(unittest.TestCase):
             broker.assert_not_called()
 
     def test_single_arm_rejects_wrong_budget_or_source(self):
-        for bad in (0,99,1001,2000,-1,True,500.1):
+        for bad in (0,-1,True,500.1):
             with self.assertRaises(live.LiveAmoError):
                 live.arm(source="TEST",budget=bad)
         with self.assertRaises(live.LiveAmoError):
@@ -144,6 +144,20 @@ class RealEquityAmoTests(unittest.TestCase):
         self.assertIsInstance(second,int)
         self.assertEqual(live._intent(second)["budget"],750)
 
+    def test_owner_can_set_large_budget_no_arbitrary_limit(self):
+        for amount in (1,100,1001,5000,19500,50000,250000):
+            result=live.update_settings(budget=amount)
+            self.assertEqual(result["per_order_budget_inr"],amount)
+            self.assertFalse(result["amo_enabled"])
+        self.assertIsNone(live.editable_settings()["budget_max_inr"])
+
+    def test_owner_large_budget_persists_to_new_signal(self):
+        live.update_settings(source="TEST",budget=25000)
+        live.arm(source="TEST",budget=25000)
+        intent=live.reserve("TEST",98765,"YESBANK",int(time.time()))
+        self.assertIsInstance(intent,int)
+        self.assertEqual(live._intent(intent)["budget"],25000)
+
     def test_edit_settings_while_off_does_not_implicitly_enable_real_trading(self):
         with patch.object(live,"_verified_broker_context") as funds, \
              patch.object(live,"_dhan_http") as real_post:
@@ -160,7 +174,7 @@ class RealEquityAmoTests(unittest.TestCase):
         for bad in ("", "UNVERIFIED", "ALL", "BANKNIFTY"):
             with self.assertRaises(live.LiveAmoError):
                 live.update_settings(source=bad)
-        for bad in (-100,0,99,1001,2000,True,500.5,"500"):
+        for bad in (-100,0,True,500.5,"500",live.SQLITE_INT_MAX+1):
             with self.assertRaises(live.LiveAmoError):
                 live.update_settings(budget=bad)
         with self.assertRaises(live.LiveAmoError):
