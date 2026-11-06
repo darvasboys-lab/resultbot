@@ -210,6 +210,21 @@ def enqueue_test_log(con: sqlite3.Connection, group_id: int, message_id: int,
         VALUES (?,?,'TEST_EXCELLENT_ALERT',?,?)""",
         (int(group_id),int(message_id),text,int(time.time())),
     )
+    # An explicitly tagged test-group alert exercises the Equity AMO
+    # preparation / safety-gate / notification pipeline without any Dhan POST.
+    # Never activate this for real Earnings Pulse alerts or regular test posts.
+    if cur.rowcount and raw_text.startswith("[RBAMO] "):
+        try:
+            from .equity_amo_preview import card as amo_preview_card
+        except ImportError:
+            from equity_amo_preview import card as amo_preview_card
+        simulated = amo_preview_card(symbol, int(sent_dt.timestamp()))
+        con.execute(
+            """INSERT OR IGNORE INTO log_outbox
+            (channel_id,message_id,kind,text_html,created_utc)
+            VALUES (?,?,'EQUITY_AMO_DRY_RUN',?,?)""",
+            (int(group_id),int(message_id),simulated,int(time.time())),
+        )
     return "test_queued" if cur.rowcount else "duplicate"
 
 
