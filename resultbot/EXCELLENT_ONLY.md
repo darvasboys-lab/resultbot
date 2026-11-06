@@ -45,28 +45,30 @@ To check locally without sending any Telegram messages:
 
 ## Test Group: safe end-to-end cross-check
 
-The existing `TEST_GROUP_ID` in `~/uditbot/.env` is used automatically; `RESULTBOT_TEST_GROUP_ID` can override it. Both require an already joined Telegram **group**, a signed negative chat ID, and an identity distinct from the Log Group and Earnings Pulse source. If the group is not resolved, the research listener continues without the test input.
+ResultBot reads the **existing** `TEST_GROUP_ID=-5149263962` on your VM (or an optional `RESULTBOT_TEST_GROUP_ID` override). It resolves the exact joined Telegram group and refuses a source/Log Group conflict. Test messages are **never** treated as Earnings Pulse alerts.
 
-In the **Telegram Test Group only**, send **exactly** these two messages as separate posts:
-
-```text
-[RBTEST] #ROLEXRINGS - 🏆🔥 Excellent Results
-```
+**There is no `[RBTEST]` prefix requirement** in the uniquely verified Test Group. These ordinary posts are accepted as separate test messages:
 
 ```text
-[RBTEST] #ROLEXRINGS - 🌟 Great Results
+#YESBANK - 🏆🔥 Excellent Results - 25 seconds ago
+#DCBBANK - 🏆🔥 Excellent Results - 25 seconds ago
+#GROWW - 🏆🔥 Excellent Results - 25 seconds ago
 ```
 
-Expected: the first produces **one** Telegram Log Group card starting `🧪 RESULTBOT TEST — EXCELLENT ONLY`, with Dhan order `NOT SUBMITTED` and execution price `N/A`. The second produces **no** Log Group notification. Neither creates a real `alerts` row, one-minute research candle, Dhan order or trade. The first message is deduplicated by test-chat/message ID; other messages without the exact `[RBTEST]` prefix do nothing. In addition to live updates, the listener polls the most recent 40 Test Group messages every 30 seconds as a fallback for same-account posts. It accepts only explicitly marked messages whose Telegram timestamp is within the last 15 minutes, so old test history is not replayed. The first scan reports `[TEST SCAN]` with scanned/marked/new counts; thereafter `TEST EXCELLENT` appears when an eligible test is newly queued.
+An old `[RBTEST]` prefix also remains supported. A Great/Good/Weak or unclassified message, or a post containing multiple distinct hashtags, is **ignored**. For the three examples above, each post must be a **separate Telegram message** so its symbol is unambiguous.
 
-Check local delivery with:
+Each accepted test message sends one synthetic card to the already-verified Log Group, labeled `🧪 RESULTBOT TEST — EXCELLENT ONLY`. It explicitly states **Dhan order: NOT SUBMITTED** and **execution price: N/A**. These messages do **not** enter the real `alerts` table, collect Yahoo prices, trigger trading or claim that a Dhan order filled.
+
+In addition to incoming live Telegram updates, the service polls the latest 40 messages in the verified Test Group every 30 seconds. It processes only Excellent posts dated within the **last 30 minutes**; message IDs are deduplicated across live events and polling. Thus, the first poll after an update can recover recent posts missed by Telegram live events. Older messages are not replayed.
+
+After restarting the listener, check `[TEST SCAN]` and `[TEST EXCELLENT]` in the journal, and use:
 
 ```bash
 ~/uditbot/venv/bin/python ~/resultbot-data/excellent_watch.py log-status
-journalctl --user -u resultbot-excellent-watch.service -n 20 --no-pager
+journalctl --user -u resultbot-excellent-watch.service -n 30 --no-pager
 ```
 
-Look for `TEST_EXCELLENT_ALERT / SENT : 1` (or higher if tests were repeated). Telegram transport failures may produce `PENDING`; a configured destination alone does not prove delivery. The test is isolated from real market research and does not imply that any Dhan integration exists.
+A successful three-message test should show `TEST_EXCELLENT_ALERT / SENT : 3` (unless earlier tests were already delivered). A configured destination alone does not prove delivery, and an ambiguous Telegram network acknowledgement can occasionally cause a duplicate card.
 
 ## Restrictions
 - No broker integration, trading, profit guarantee, historical minute coverage guarantee, or application-level Yahoo API SLA.
