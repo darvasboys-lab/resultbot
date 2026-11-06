@@ -12,6 +12,8 @@ DEFAULT = {
     "average_down":[3,6],         # drop% for each buy
     "take_profit":[[2,50],[4,75]], # rise%, cumulative original quantity sold%
     "add_up":[2,4],                # rise% for each buy
+    "average_down_amounts_inr":[500,500],  # budget per averaging stage
+    "add_up_amounts_inr":[500,500],        # budget per add-up stage
     "stop_pct":9, "target_pct":5, # absolute first-fill anchors
     "initial_budget_inr":500, "extra_budget_inr":500,
     "total_buy_cap_inr":2500, "execution_enabled":False
@@ -29,6 +31,11 @@ def valid(d):
         xs=d[key]
         if len(xs)>5 or any(not isinstance(x,(int,float)) or not 0<x<100 for x in xs) or sorted(set(xs))!=xs:
             raise ValueError(key+": specify 0-5 ascending distinct percentages")
+    for key in ("average_down","add_up"):
+        amounts = d[key+"_amounts_inr"]
+        if (not isinstance(amounts,list) or len(amounts)!=len(d[key]) or
+            any(not isinstance(x,(int,float)) or isinstance(x,bool) or not math.isfinite(x) or x<=0 for x in amounts)):
+            raise ValueError(key+" budgets: one positive INR amount for each price trigger")
     for key in ("cut_down","take_profit"):
         xs=d[key]
         if len(xs)>5 or any(not isinstance(x,list) or len(x)!=2 for x in xs):
@@ -41,8 +48,10 @@ def valid(d):
     up = d["add_up"] if d["up_mode"]=="ADD_UP" else [p for p,q in d["take_profit"]] if d["up_mode"]=="TAKE_PROFIT" else []
     if down and max(down)>=d["stop_pct"]: raise ValueError("Final stop must be below all active downside triggers")
     if up and max(up)>=d["target_pct"]: raise ValueError("Final target must be above all active upside triggers")
-    buy_steps = (len(d["average_down"]) if d["down_mode"]=="AVERAGE" else 0)+(len(d["add_up"]) if d["up_mode"]=="ADD_UP" else 0)
-    if d["initial_budget_inr"]+buy_steps*d["extra_budget_inr"]>d["total_buy_cap_inr"]:
+    buying=d["initial_budget_inr"]
+    if d["down_mode"]=="AVERAGE": buying+=sum(d["average_down_amounts_inr"])
+    if d["up_mode"]=="ADD_UP": buying+=sum(d["add_up_amounts_inr"])
+    if buying>d["total_buy_cap_inr"]:
         raise ValueError("Total buy cap cannot cover all configured additional buys")
 
 def load():
@@ -66,9 +75,15 @@ def edits(d):
     for k in ("initial_budget_inr","extra_budget_inr","total_buy_cap_inr"):
         d[k]=float(ask(k.replace('_',' '),d[k]))
     key={"CUT":"cut_down","AVERAGE":"average_down","STOP_ONLY":None}[d["down_mode"]]
-    if key: d[key]=read_levels(key,d[key])
+    if key:
+        d[key]=read_levels(key,d[key])
+        if key=="average_down":
+            d["average_down_amounts_inr"]=(d["average_down_amounts_inr"]+[d["extra_budget_inr"]]*len(d[key]))[:len(d[key])]
     key={"TAKE_PROFIT":"take_profit","ADD_UP":"add_up","TARGET_ONLY":None}[d["up_mode"]]
-    if key: d[key]=read_levels(key,d[key])
+    if key:
+        d[key]=read_levels(key,d[key])
+        if key=="add_up":
+            d["add_up_amounts_inr"]=(d["add_up_amounts_inr"]+[d["extra_budget_inr"]]*len(d[key]))[:len(d[key])]
     d["execution_enabled"]=False
     valid(d)
     FILE.parent.mkdir(parents=True,exist_ok=True)
@@ -94,14 +109,17 @@ def show(d,first):
     if d['down_mode']=='CUT':
         for p,q in d['cut_down']: print(f'  DROP -{p:g}% ₹{first*(1-p/100):.2f}: CUT to {q:g}% cumulative original shares sold')
     if d['down_mode']=='AVERAGE':
-        for p in d['average_down']: print(f'  DROP -{p:g}% ₹{first*(1-p/100):.2f}: BUY extra up to ₹{d["extra_budget_inr"]:g}')
+        for p,amount in zip(d['average_down'],d['average_down_amounts_inr']): print(f'  DROP -{p:g}% ₹{first*(1-p/100):.2f}: BUY extra up to ₹{amount:g}')
     if d['up_mode']=='TAKE_PROFIT':
         for p,q in d['take_profit']: print(f'  RISE +{p:g}% ₹{first*(1+p/100):.2f}: BOOK to {q:g}% cumulative original shares sold')
     if d['up_mode']=='ADD_UP':
-        for p in d['add_up']: print(f'  RISE +{p:g}% ₹{first*(1+p/100):.2f}: BUY extra up to ₹{d["extra_budget_inr"]:g}')
+        for p,amount in zip(d['add_up'],d['add_up_amounts_inr']): print(f'  RISE +{p:g}% ₹{first*(1+p/100):.2f}: BUY extra up to ₹{amount:g}')
     print(f'  STOP -{d["stop_pct"]:g}% ₹{first*(1-d["stop_pct"]/100):.2f}: close ALL remaining')
     print(f'  TARGET +{d["target_pct"]:g}% ₹{first*(1+d["target_pct"]/100):.2f}: close ALL remaining')
-    print(f'Maximum total planned buying ₹{d["total_buy_cap_inr"]:g}')
+    buying=d["initial_budget_inr"]
+    if d["down_mode"]=="AVERAGE": buying+=sum(d["average_down_amounts_inr"])
+    if d["up_mode"]=="ADD_UP": buying+=sum(d["add_up_amounts_inr"])
+    print(f'Planned maximum buying ₹{buying:g} / Ceiling ₹{d["total_buy_cap_inr"]:g}')
     print('Cumulative exits use ORIGINAL filled share count; never % of remaining shares.')
     print('No live orders, no broker API calls, no Dhan services changed.')
 
@@ -115,7 +133,15 @@ def test():
         try:valid(d)
         except ValueError: pass
         else:raise AssertionError('Non-increasing cumulative exits accepted')
-    print('PASS: 9 mode combinations + safety validation')
+    d=deepcopy(c); d["up_mode"]="ADD_UP"; d["add_up_amounts_inr"]=[500,20000]
+    try:valid(d)
+    except ValueError: pass
+    else:raise AssertionError("Stage budget cap bypassed")
+    d=deepcopy(c); d["down_mode"]="AVERAGE"; d["average_down_amounts_inr"]=[500]
+    try:valid(d)
+    except ValueError: pass
+    else:raise AssertionError("Stage budget mismatch accepted")
+    print('PASS: 9 mode combinations + per-stage budget validation')
 
 
 # Numbered menu: preserves existing JSON and never enables execution.
@@ -144,29 +170,41 @@ def _count(question, default):
     return n
 
 def _custom_levels(d, side):
+    """Each stage: percentage trigger FIRST, then buy rupees or cumulative sold shares."""
     if side == "down":
         key = {"CUT":"cut_down","AVERAGE":"average_down","STOP_ONLY":None}[d["down_mode"]]
-        label = "price DROP"
+        direction = "FALL"
     else:
         key = {"TAKE_PROFIT":"take_profit","ADD_UP":"add_up","TARGET_ONLY":None}[d["up_mode"]]
-        label = "price RISE"
+        direction = "RISE"
     if key is None:
-        print("No intermediate stages for this option.")
+        print("No intermediate stages on this side.")
         return
-    prev = d[key]
-    count = _count(f"How many {label} stages?", len(prev))
-    stages = []
+    previous = d[key]
+    old_amounts = d.get(key+"_amounts_inr",[])
+    count = _count(f"How many {direction} stages?", len(previous))
+    stages, amounts = [], []
     for i in range(count):
-        if key in ("cut_down", "take_profit"):
-            old_trigger = prev[i][0] if i < len(prev) else (stages[-1][0]+2 if stages else 2)
-            old_fraction = prev[i][1] if i < len(prev) else min(99, 50+25*i)
-            trig = _number(f"  Stage {i+1}: trigger after {label} (%)", old_trigger)
-            frac = _number(f"  Stage {i+1}: TOTAL % of original shares to have sold", old_fraction)
-            stages.append([trig, frac])
+        print(f"\n--- {direction} STAGE {i+1} of {count} ---")
+        if i < len(previous):
+            old_trigger = previous[i][0] if key in ("cut_down","take_profit") else previous[i]
+        elif stages:
+            old_trigger = (stages[-1][0] if key in ("cut_down","take_profit") else stages[-1])+2
         else:
-            old_trigger = prev[i] if i < len(prev) else (stages[-1]+2 if stages else 2)
-            stages.append(_number(f"  Stage {i+1}: trigger after {label} (%)", old_trigger))
+            old_trigger = 2
+        trigger = _number(f"1. At what % should price {direction.lower()} from FIRST buy?", old_trigger)
+        if key in ("cut_down","take_profit"):
+            old_fraction = previous[i][1] if i<len(previous) else min(99,50+25*i)
+            fraction = _number("2. By now, what TOTAL % of ORIGINAL shares should be sold?", old_fraction)
+            stages.append([trigger, fraction])
+        else:
+            old_amount = old_amounts[i] if i<len(old_amounts) else d["extra_budget_inr"]
+            amount = _number("2. How many rupees (INR) to BUY at this stage?", old_amount)
+            stages.append(trigger)
+            amounts.append(amount)
     d[key] = stages
+    if key in ("average_down","add_up"):
+        d[key+"_amounts_inr"] = amounts
 
 def easy(d):
     """Human-friendly configuration wizard; config only, not order execution."""
@@ -199,13 +237,13 @@ def easy(d):
         if name: d[name] = deepcopy(presets[name])
     print("\nCURRENT LEVELS (first buy price used as reference):")
     show(d, 100)
-    if _yes("\nCustomize the stages and their percentages?"):
-        _custom_levels(d,"down")
-        _custom_levels(d,"up")
+    print("\nNOW SET EACH STAGE: first PRICE %, next HOW MUCH.")
+    _custom_levels(d,"down")
+    _custom_levels(d,"up")
     if _yes("Change final stop-loss or target percentages?"):
         d["stop_pct"] = _number("  Final stop below first buy (%)", d["stop_pct"])
         d["target_pct"] = _number("  Final target above first buy (%)", d["target_pct"])
-    if _yes("Change initial budget, buy addition budget, or total limit?"):
+    if _yes("Change first-buy budget, default NEW-stage buy budget, or total ceiling?"):
         d["initial_budget_inr"] = _number("  First buy budget (INR)", d["initial_budget_inr"])
         d["extra_budget_inr"] = _number("  Each additional buy budget (INR)", d["extra_budget_inr"])
         d["total_buy_cap_inr"] = _number("  Maximum total planned buying (INR)", d["total_buy_cap_inr"])
