@@ -235,7 +235,7 @@ class ExcellentOnlyTests(unittest.TestCase):
             for (kind,card),sym in zip(cards,("YESBANK","DCBBANK","GROWW")):
                 self.assertEqual(kind,"TEST_EXCELLENT_ALERT")
                 self.assertIn("#"+sym,card)
-                self.assertIn("NOT A REAL EARNINGS ALERT",card)
+                self.assertIn("NOT AN EARNINGS PULSE ALERT",card)
                 self.assertIn("Telegram receipt",card)
                 self.assertIn("separate AMO card",card)
                 self.assertIn("execution price: n/a",card.lower())
