@@ -125,8 +125,8 @@ edit_budget() {
     fi
 
     # Normalize ordinary input whitespace; reject other formatting.
-    desired="${desired#"''${desired%%[![:space:]]*}''"}"
-    desired="${desired%"''${desired##*[![:space:]]}''"}"
+    desired="${desired#"${desired%%[![:space:]]*}"}"
+    desired="${desired%"${desired##*[![:space:]]}"}"
     if [[ ! "$desired" =~ ^[0-9]+$ ]]; then
         echo "INVALID AMOUNT: Please enter whole rupees, e.g. 600."
         echo "No settings were changed; still INR $current. Returning to menu."
