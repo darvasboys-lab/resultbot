@@ -789,8 +789,8 @@ def main():
     sub.add_parser("self-test")
     sub.add_parser("off")
     x=sub.add_parser("arm")
-    x.add_argument("--source",choices=["TEST","EARNINGS_PULSE","BOTH"],default="BOTH")
-    x.add_argument("--budget",type=int,default=BUDGET_DEFAULT)
+    x.add_argument("--source",choices=["TEST","EARNINGS_PULSE","BOTH"],default=None)
+    x.add_argument("--budget",type=int,default=None)
     x=sub.add_parser("cancel")
     x.add_argument("--intent-id",type=int,required=True)
     sub.add_parser("monitor")
@@ -819,7 +819,13 @@ def main():
             raise SystemExit(1) from None
         return
     if a.cmd=="off": print(json.dumps(disarm(),indent=2));return
-    if a.cmd=="arm": print(json.dumps(arm(source=a.source,budget=a.budget),indent=2));return
+    if a.cmd=="arm":
+        # Bare 'arm' uses SAVED settings, never resets owner choices to BOTH/500.
+        saved=editable_settings()
+        selected=saved["source"] if a.source is None else a.source
+        amount=saved["per_order_budget_inr"] if a.budget is None else a.budget
+        print(json.dumps(arm(source=selected,budget=amount),indent=2))
+        return
     if a.cmd=="cancel": print("Cancel response:",request_cancel(a.intent_id));return
     if a.cmd=="monitor": print("Updated broker orders:",monitor())
 
