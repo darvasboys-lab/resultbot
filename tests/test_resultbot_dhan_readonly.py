@@ -79,6 +79,63 @@ class DhanReadOnlyTests(unittest.TestCase):
         self.assertNotIn("z"*32,recorded[0].full_url)
         self.assertEqual(recorded[0].get_header("Access-token"),"z"*32)
 
+
+    def test_totp_auth_query_post_no_secret_in_logs_or_saved_file(self):
+        class FakeResponse:
+            status = 200
+            def __enter__(self): return self
+            def __exit__(self,*args): return None
+            def read(self,n):
+                return json.dumps({
+                    "dhanClientId":"1105508885",
+                    "accessToken":"T"*50
+                }).encode()
+        class FakeOpener:
+            requests=[]
+            def open(self,request,timeout=12):
+                self.requests.append(request)
+                return FakeResponse()
+        fake=FakeOpener()
+        with patch.object(dh,"build_opener",return_value=fake):
+            token=dh.token_from_pin_totp("1105508885","123456","654321")
+        self.assertEqual(token,"T"*50)
+        self.assertEqual(fake.requests[0].get_method(),"POST")
+        self.assertIn("https://auth.dhan.co/app/generateAccessToken?",fake.requests[0].full_url)
+        self.assertIn("pin=123456",fake.requests[0].full_url)
+        self.assertIn("totp=654321",fake.requests[0].full_url)
+        self.assertEqual(fake.requests[0].data,b"")
+        with tempfile.TemporaryDirectory() as td:
+            path=Path(td)/"cred.json"
+            dh.store_credentials("1105508885",token,path)
+            self.assertNotIn("123456",path.read_text())
+            self.assertNotIn("654321",path.read_text())
+
+    def test_totp_auth_account_mismatch_rejected(self):
+        class FakeResponse:
+            status=200
+            def __enter__(self):return self
+            def __exit__(self,*args):return None
+            def read(self,n):return json.dumps({
+                "dhanClientId":"9999999999","accessToken":"T"*50
+            }).encode()
+        class FakeOpener:
+            def open(self,req,timeout=12):return FakeResponse()
+        with patch.object(dh,"build_opener",return_value=FakeOpener()):
+            with self.assertRaisesRegex(dh.DhanReadError,"different client ID"):
+                dh.token_from_pin_totp("1105508885","123456","654321")
+
+    def test_totp_error_does_not_leak_credentials_in_error(self):
+        from urllib.error import HTTPError
+        class FakeOpener:
+            def open(self,request,timeout=12):
+                raise HTTPError(request.full_url, 401, "Unauthorized", {}, None)
+        with patch.object(dh,"build_opener",return_value=FakeOpener()):
+            with self.assertRaises(dh.DhanReadError) as ctx:
+                dh.token_from_pin_totp("1105508885","123456","654321")
+        self.assertNotIn("123456",str(ctx.exception))
+        self.assertNotIn("654321",str(ctx.exception))
+        self.assertNotIn("1105508885",str(ctx.exception))
+
     def test_builtin_self_test(self):
         dh.self_test()
 
