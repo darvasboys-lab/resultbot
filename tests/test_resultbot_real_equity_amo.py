@@ -1,4 +1,4 @@
-"""Offline REAL Equity AMO one-shot controls: broker calls are mocked."""
+"""Offline REAL Equity AMO persistent YES/NO controls: broker calls mocked."""
 import json
 import tempfile
 import time
@@ -86,13 +86,18 @@ class RealEquityAmoTests(unittest.TestCase):
         self.assertIsNone(live.reserve("TEST",9,"A/B",int(time.time())))
         self.assertTrue(live.status()["effective_on"])
 
-    def test_reserved_intent_disarms_and_is_idempotent(self):
+    def test_reserved_intent_keeps_amo_on_and_is_idempotent(self):
         ident=self.reserved()
-        self.assertFalse(live.status()["effective_on"])
+        self.assertTrue(live.status()["effective_on"])
         self.assertIsNone(live.reserve("TEST",9,"YESBANK",int(time.time())))
         self.assertEqual(live._intent(ident)["state"],"RESERVED")
-        with self.assertRaises(live.LiveAmoError):
-            live.arm(source="TEST",budget=500)
+        # ON is durable, and the owner need not arm again for every alert.
+        again=live.reserve("TEST",10,"TRIDENT",int(time.time()))
+        self.assertIsInstance(again,int)
+        self.assertNotEqual(ident,again)
+        self.assertTrue(live.status()["effective_on"])
+        # Even with pending orders and a prior attempt today, YES stays valid.
+        self.assertTrue(live.arm(source="TEST",budget=500)["effective_on"])
 
     def test_off_before_broker_transition_blocks_post(self):
         ident=self.reserved()
@@ -122,7 +127,7 @@ class RealEquityAmoTests(unittest.TestCase):
         item=live._intent(ident)
         self.assertEqual(item["order_id"],OID)
         self.assertEqual(item["state"],"ACKED")
-        self.assertFalse(live.status()["effective_on"])
+        self.assertTrue(live.status()["effective_on"])
 
     def test_timeout_goes_unknown_and_never_reposts(self):
         ident=self.reserved()
@@ -142,6 +147,74 @@ class RealEquityAmoTests(unittest.TestCase):
             get_order.assert_called_once()
         self.assertEqual(live._intent(ident)["order_id"],OID)
         self.assertEqual(live._intent(ident)["state"],"ACKED")
+
+    def test_yes_persists_across_restart_and_no_ten_minute_expiry(self):
+        self.armed()
+        with live.managed_db() as con:
+            con.execute("UPDATE control SET armed_since=? WHERE id=1",
+                        (int(time.time())-86400,))
+            con.execute("UPDATE control SET expires=1 WHERE id=1")
+        # Legacy expiry column may exist, but is no longer consulted.
+        self.assertTrue(live.status()["effective_on"])
+        with live.managed_db() as reopened:
+            self.assertEqual(live._control(reopened)["armed"],1)
+        order_id=live.reserve("TEST",101,"TRIDENT",int(time.time()))
+        self.assertIsInstance(order_id,int)
+        self.assertTrue(live.status()["effective_on"])
+        self.assertIn("YES / ON",live.status_short())
+
+    def test_no_disables_future_orders_but_preserves_existing_orders(self):
+        ident=self.reserved()
+        live._update(ident,"ACKED",order_id=OID,security_id="1333",
+                     qty=5,price=20.0,broker_status="PENDING")
+        live.disarm()
+        self.assertFalse(live.status()["effective_on"])
+        self.assertIsNone(live.reserve("TEST",102,"TRIDENT",int(time.time())))
+        self.assertEqual(live._intent(ident)["state"],"ACKED")
+        self.assertEqual(live._intent(ident)["order_id"],OID)
+
+    def test_allows_real_earnings_and_owner_test_messages_when_on(self):
+        live.arm(source="BOTH",budget=500)
+        first=live.reserve("TEST",201,"YESBANK",int(time.time()))
+        second=live.reserve("EARNINGS_PULSE",201,"YESBANK",int(time.time()))
+        self.assertIsInstance(first,int)
+        self.assertIsInstance(second,int)
+        self.assertNotEqual(first,second)
+        self.assertNotEqual(live._intent(first)["correlation"],
+                            live._intent(second)["correlation"])
+        self.assertTrue(live.status()["effective_on"])
+        self.assertEqual(live.status()["active_orders"],2)
+
+    def test_multiple_distinct_real_dhan_orders_without_rearming(self):
+        self.armed()
+        broker_replies=[
+            {"orderId":OID,"orderStatus":"PENDING"},
+            {"orderId":str(int(OID)+1),"orderStatus":"PENDING"},
+        ]
+        with patch.object(live,"_dhan_http",side_effect=broker_replies) as broker, \\
+             patch.object(live,"_verify_owned_order",return_value=fake_broker_order()):
+            first=live.reserve("TEST",302,"YESBANK",int(time.time()))
+            live.execute(first)
+            second=live.reserve("TEST",303,"TRIDENT",int(time.time()))
+            live.execute(second)
+            self.assertEqual(broker.call_count,2)
+        self.assertEqual(live._intent(first)["state"],"ACKED")
+        self.assertEqual(live._intent(second)["state"],"ACKED")
+        self.assertNotEqual(live._intent(first)["order_id"],
+                            live._intent(second)["order_id"])
+        self.assertTrue(live.status()["effective_on"])
+
+    def test_ongoing_monitor_never_auto_cancels_pending_amo(self):
+        ident=self.reserved()
+        live._update(ident,"ACKED",order_id=OID,security_id="1333",
+                     qty=5,price=20.0,broker_status="PENDING",cancel_after=1)
+        with patch.object(live,"_verify_owned_order",
+                          return_value=fake_broker_order()), \\
+             patch.object(live,"request_cancel") as cancel:
+            live.monitor()
+            cancel.assert_not_called()
+        self.assertEqual(live._intent(ident)["state"],"ACKED")
+        self.assertEqual(live._intent(ident)["cancel_attempted"],0)
 
     def test_cancel_only_verified_owned_order_once(self):
         ident=self.reserved()
