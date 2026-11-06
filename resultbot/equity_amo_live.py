@@ -625,6 +625,23 @@ def monitor() -> int:
     return changed
 
 
+def preflight() -> dict:
+    """Real Dhan read-only readiness check; never creates or cancels an order."""
+    if not trading_service_stopped():
+        raise LiveAmoError("Trading service must be inactive and disabled")
+    if not _session_closed():
+        raise LiveAmoError("Closed-market AMO window not verified")
+    account,token=dh.load_credentials()
+    balance=_verified_broker_context(account,token)
+    if balance<200:
+        raise LiveAmoError("Insufficient verified available balance even for a small Equity AMO")
+    return {"dhan_account":dh.display_account(account),
+            "available_to_trade_inr":round(float(balance),2),
+            "outbound_static_ip_whitelisted":True,
+            "trading_bot_inactive_and_disabled":True,
+            "real_order_submitted":False}
+
+
 def offline_self_test():
     assert _session_closed is not None
     assert BUDGET_MAX==1000 and ARM_SECONDS==600
@@ -642,6 +659,7 @@ def main():
     p=argparse.ArgumentParser(description="ResultBot LIVE Equity AMO control; intentionally OFF by default")
     sub=p.add_subparsers(dest="cmd",required=True)
     sub.add_parser("status")
+    sub.add_parser("preflight")
     sub.add_parser("self-test")
     sub.add_parser("off")
     x=sub.add_parser("arm")
@@ -653,6 +671,7 @@ def main():
     a=p.parse_args()
     if a.cmd=="self-test": offline_self_test();return
     if a.cmd=="status": print(json.dumps(status(),indent=2));return
+    if a.cmd=="preflight": print(json.dumps(preflight(),indent=2));return
     if a.cmd=="off": print(json.dumps(disarm(),indent=2));return
     if a.cmd=="arm": print(json.dumps(arm(source=a.source,budget=a.budget),indent=2));return
     if a.cmd=="cancel": print("Cancel response:",request_cancel(a.intent_id));return
