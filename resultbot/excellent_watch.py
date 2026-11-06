@@ -219,8 +219,12 @@ def summarize(con: sqlite3.Connection, alert_id: int) -> dict:
     rows = [r for r in con.execute("""SELECT ts_utc,low,high,close FROM one_minute_bars
       WHERE symbol=? AND ts_utc>=? AND ts_utc<=? ORDER BY ts_utc""",
       (sym, first_ts, first_ts+3600)) if same_session(first_ts, r[0])]
-    d["observed_low_pct"] = round((min(r[1] for r in rows)/first_price-1)*100, 3)
-    d["observed_high_pct"] = round((max(r[2] for r in rows)/first_price-1)*100, 3)
+    # The reference first_price is the CLOSE of first_ts: its own high/low
+    # could have happened BEFORE that close and must never be counted as
+    # post-reference excursions. Only LATER completed bars are eligible.
+    range_rows = [r for r in rows if r[0] > first_ts]
+    d["observed_low_pct"] = round((min(r[1] for r in range_rows)/first_price-1)*100, 3) if range_rows else None
+    d["observed_high_pct"] = round((max(r[2] for r in range_rows)/first_price-1)*100, 3) if range_rows else None
     for minutes in (5, 15, 30, 60):
         # First completed candle AT/AFTER milestone, at most 2 min late.
         candidates = [r for r in rows if first_ts + minutes*60 <= r[0] <= first_ts+(minutes+2)*60]
@@ -233,6 +237,8 @@ def report(con: sqlite3.Connection, limit: int = 25) -> None:
     total = con.execute("SELECT count(*) FROM alerts").fetchone()[0]
     print(f"RESULTBOT / EXCELLENT ONLY / RESEARCH MODE  |  stored alerts: {total}")
     print("Return is from FIRST verified post-alert 1m CLOSE, not Telegram arrival price.")
+    print("Candle timestamp is its OPEN; the reference CLOSE is observed approximately one minute later.")
+    print("High/low exclude the reference candle because its extremes could precede that close.")
     print("1m bar containing the alert is excluded. A missing return means NOT VERIFIED.")
     print("Prices are delayed/retrospective research candles, NOT executable entry quotes.")
     for (alert_id,) in con.execute("SELECT id FROM alerts ORDER BY sent_utc DESC LIMIT ?", (limit,)):
@@ -242,7 +248,9 @@ def report(con: sqlite3.Connection, limit: int = 25) -> None:
         ret = [f"{m}m={'N/A' if d.get(f'return_{m}m_pct') is None else str(d[f'return_{m}m_pct'])+'%'}" for m in (5,15,30,60)]
         if d["first_bar_utc"] is not None:
             first_when=datetime.fromtimestamp(d["first_bar_utc"],IST).strftime("%d-%b %H:%M IST")
-            range_text=f" | observed low={d['observed_low_pct']:+.2f}% high={d['observed_high_pct']:+.2f}%"
+            low = "N/A" if d["observed_low_pct"] is None else f'{d["observed_low_pct"]:+.2f}%'
+            high = "N/A" if d["observed_high_pct"] is None else f'{d["observed_high_pct"]:+.2f}%'
+            range_text=f" | post-reference low={low} high={high}"
         else:
             first_when="NO POST-ALERT BAR"
             range_text=""
