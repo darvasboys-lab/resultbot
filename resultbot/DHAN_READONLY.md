@@ -15,13 +15,25 @@ This standalone module connects the ResultBot VM to **DhanHQ API v2** for profil
 
 The production VM has a separate, existing `~/uditbot/venv/bin/python` environment. Download `resultbot/dhan_readonly.py` into `~/resultbot-data/dhan_readonly.py` from a **pinned GitHub commit**, compile and self-test before using it.
 
-Then run, interactively in a secure SSH terminal:
+Then choose **one** secure authentication method in an interactive SSH terminal:
+
+**Recommended when Dhan TOTP is enabled:**
+
+```bash
+~/uditbot/venv/bin/python ~/resultbot-data/dhan_readonly.py setup-totp
+```
+
+The CLI asks you to type `GENERATE`, enter your numeric Dhan Client ID, **6-digit Dhan PIN**, and the **current 6-digit TOTP from your authenticator app**. Both secret fields have hidden terminal input. No QR seed, PIN, or TOTP is stored. Dhan's documented login endpoint `POST https://auth.dhan.co/app/generateAccessToken` requires these values as **HTTPS query parameters**; the script does not print, log, redirect, or cache the sensitive URL. A 24-hour access token is saved only if an independent `GET /profile` confirms that it belongs to the entered account. This is the sole POST call, strictly limited to **authentication**. All broker/order operations remain GET-only. You may need to regenerate a fresh token after expiry.
+
+**Alternative when you already generated the Access Token in Dhan Web:**
 
 ```bash
 ~/uditbot/venv/bin/python ~/resultbot-data/dhan_readonly.py setup
 ```
 
-Enter your Dhan Client ID, followed by the access token when prompted. The token input is hidden. The script verifies `GET https://api.dhan.co/v2/profile` and account identity before saving the credentials. Invalid credentials are not persisted.
+This accepts the long Dhan API access token (not the 6-digit TOTP code). Both methods validate `GET https://api.dhan.co/v2/profile` and account identity before saving credentials. Dhan currently supports up to five active access tokens per account; if limit reached, use Dhan Web to manage active tokens instead of repeatedly retrying login. Never share PIN, TOTP, authenticator seed, or token in chat.
+
+**Important:** The Dhan `Setup TOTP` button enables an authenticator. It is not itself an API access token. You still need the current authenticator code plus your Dhan PIN to use `setup-totp`.
 
 After successful verification:
 
