@@ -1,0 +1,85 @@
+name: ResultBot Excellent-only research checks
+
+on:
+  pull_request:
+    paths:
+      - "resultbot/excellent_watch.py"
+      - "resultbot/dhan_readonly.py"
+      - "resultbot/dhan_bridge.py"
+      - "resultbot/equity_amo_preview.py"
+      - "resultbot/equity_amo_live.py"
+      - "resultbot/install_real_amo.sh"
+      - "resultbot/amo_yes_no.sh"
+      - "resultbot/amo_settings.sh"
+      - "resultbot/install_amo_settings.sh"
+      - "tests/test_resultbot_real_equity_amo.py"
+      - "tests/test_resultbot_equity_amo_preview.py"
+      - "tests/test_resultbot_dhan_bridge.py"
+      - "resultbot/install_dhan_autorenew.sh"
+      - "tests/test_resultbot_dhan_readonly.py"
+      - "tests/test_resultbot_excellent_watch.py"
+      - ".github/workflows/resultbot-excellent-research.yml"
+  push:
+    branches:
+      - "feature/excellent-only-collector-20261106"
+      - "feature/resultbot-dhan-funds-readonly-20261107"
+      - "feature/resultbot-real-equity-amo-one-shot-20261107"
+    paths:
+      - "resultbot/excellent_watch.py"
+      - "resultbot/dhan_readonly.py"
+      - "resultbot/dhan_bridge.py"
+      - "resultbot/equity_amo_preview.py"
+      - "resultbot/equity_amo_live.py"
+      - "resultbot/install_real_amo.sh"
+      - "resultbot/amo_yes_no.sh"
+      - "resultbot/amo_settings.sh"
+      - "resultbot/install_amo_settings.sh"
+      - "tests/test_resultbot_real_equity_amo.py"
+      - "tests/test_resultbot_equity_amo_preview.py"
+      - "tests/test_resultbot_dhan_bridge.py"
+      - "resultbot/install_dhan_autorenew.sh"
+      - "tests/test_resultbot_dhan_readonly.py"
+      - "tests/test_resultbot_excellent_watch.py"
+      - ".github/workflows/resultbot-excellent-research.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  offline-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Install limited test dependencies
+        run: python -m pip install "telethon==1.38.1" "python-dotenv>=1.0.1,<2.0.0"
+      - name: Compile ResultBot research and Dhan GET-only connector
+        run: python -m py_compile resultbot/excellent_watch.py resultbot/dhan_readonly.py resultbot/dhan_bridge.py resultbot/equity_amo_preview.py resultbot/equity_amo_live.py
+      - name: Syntax-check isolated ResultBot token timer installer
+        run: bash -n resultbot/install_dhan_autorenew.sh
+      - name: Syntax-check terminal AMO settings editor and installers
+        run: bash -n resultbot/install_real_amo.sh resultbot/amo_yes_no.sh resultbot/amo_settings.sh resultbot/install_amo_settings.sh
+      - name: Verify REAL Equity AMO offline owner-control and broker safety regression
+        run: python -m unittest -v tests.test_resultbot_real_equity_amo
+      - name: Verify REAL Equity AMO OFF-by-default self-test
+        run: python resultbot/equity_amo_live.py self-test
+      - name: Verify Equity AMO dry-run self-test
+        run: python resultbot/equity_amo_preview.py --self-test
+      - name: Verify Equity AMO Test Group pipeline
+        run: python -m unittest -v tests.test_resultbot_equity_amo_preview
+      - name: Verify Dhan GET-only self-test
+        run: python resultbot/dhan_readonly.py self-test
+      - name: Run Dhan GET-only offline tests
+        run: python -m unittest -v tests.test_resultbot_dhan_readonly
+      - name: Verify Dhan broker bridge self-test
+        run: python resultbot/dhan_bridge.py self-test
+      - name: Run Dhan broker bridge offline regression tests
+        run: python -m unittest -v tests.test_resultbot_dhan_bridge
+      - name: Verify internal self-test
+        run: python resultbot/excellent_watch.py self-test
+      - name: Run Excellent-only offline unit tests
+        run: python -m unittest -v tests.test_resultbot_excellent_watch
