@@ -38,7 +38,7 @@ notice() {
         whiptail --title "ResultBot Settings" \
           --msgbox "$message" 13 80 || true
     else
-        printf '%s\\n' "$message"
+        printf '%s\n' "$message"
     fi
 }
 
