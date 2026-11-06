@@ -30,6 +30,19 @@ Runtime database: `~/resultbot-data/excellent_watch.sqlite3` (does not overwrite
 
 Service (after successful interactive login): copy the `.service` file to `~/.config/systemd/user/resultbot-excellent-watch.service`, run `systemctl --user daemon-reload` and `systemctl --user enable --now resultbot-excellent-watch.service`. Use `journalctl --user -u resultbot-excellent-watch -n 50 --no-pager` for logs. Running across logout/reboot may require user lingering to be enabled by the VM owner.
 
+## Excellent-only Telegram Log Group cards
+When a new Excellent alert is captured by the running `listen` service, the collector may send an **Excellent alert received** card to your existing joined Telegram Log Group. It reads `RESULTBOT_LOG_GROUP_ID` (if set) or falls back to `LOG_GROUP_ID` from `~/uditbot/.env`. The destination must resolve to exactly one joined signed-ID Telegram group, never the signal-source channel. Missing or invalid configuration disables outgoing cards without interrupting research.
+
+**Historical backfills, startup catch-up imports, Great/Good/Weak and other messages never generate cards or 'blocked' notices.** New Excellent live messages are durably queued once by Telegram message ID. Delivery retries are bounded; ambiguous network acknowledgements can very rarely duplicate a message, so do not claim end-to-end exactly once. Unsent notices older than 24 hours expire instead of replaying a huge backlog.
+
+Each card states **Dhan order (ResultBot research): NOT SUBMITTED** and **Dhan execution price: N/A**. These are truthful research-collector statements, *not* a Dhan rejection and *not* an observation about another bot or manually placed order. This module does not read Dhan order status or trade fills. A separate, properly correlated broker-status integration will be required before sending real execution/price or rejection cards. NEVER display Yahoo research prices as broker execution fills.
+
+To check locally without sending any Telegram messages:
+
+```
+~/uditbot/venv/bin/python ~/resultbot-data/excellent_watch.py log-status
+```
+
 ## Restrictions
 - No broker integration, trading, profit guarantee, historical minute coverage guarantee, or application-level Yahoo API SLA.
 - No `set -e` installation snippet; validate files before installing; never enable `trading_bot.service` as part of research.
