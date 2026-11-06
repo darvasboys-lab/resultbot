@@ -70,7 +70,7 @@ class Panel(BaseHTTPRequestHandler):
         for x in state["orders"]:
             oid=html.escape(x["order_id"] or "UNCONFIRMED")
             c=""
-            if x["state"] in ("ACKED","CANCEL_REQUESTED") and x["order_id"]:
+            if x["state"] in ("ACKED","UNKNOWN","CANCEL_REQUESTED") and x["order_id"]:
                 c=(f'<form method="post" action="/cancel"><input name="csrf" type="hidden" value="{self.server.csrf}">'
                    f'<input type="hidden" name="intent" value="{x["id"]}"><button>Cancel at Dhan</button></form>')
             rows.append(f'<tr><td>{x["id"]}</td><td>{html.escape(x["symbol"])}</td><td>{html.escape(x["state"])}</td>'
