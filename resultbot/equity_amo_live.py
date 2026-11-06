@@ -41,9 +41,12 @@ STATE_DB = ROOT / "equity_amo_live.sqlite3"
 IST = ZoneInfo("Asia/Kolkata")
 TEST_PREFIX = "[RBLIVEAMO] "
 BUDGET_DEFAULT = 500
-BUDGET_MAX = 1000
+# SQLite stores signed 64-bit integers; this is a storage format constraint,
+# NOT an operator-facing trading budget or risk cap.
+SQLITE_INT_MAX = (1 << 63) - 1
 # This is a persistent owner ON/OFF toggle, NOT a one-shot or expiring arm.
-# Broker limits are per-order financial safeguards, never number-of-orders caps.
+# The owner sets the per-order amount; the bot only sizes whole shares and
+# checks the resulting order against the broker's actual available funds.
 MAX_SIGNAL_AGE = 90
 EGRESS_CHECK_URL = "https://api.ipify.org"
 TERMINAL = frozenset({"TRADED", "REJECTED", "CANCELLED", "EXPIRED"})
@@ -147,6 +150,18 @@ def status_short() -> str:
             " | unresolved broker intents="+str(data["active_orders"]))
 
 
+def validate_budget(budget: int) -> int:
+    """Owner-chosen positive whole-rupee amount; no arbitrary risk upper cap.
+
+    Only reject values that cannot be stored as a SQLite integer or cannot
+    represent any positive whole-rupee budget. Broker funds and order
+    constraints are checked when an actual signal is submitted.
+    """
+    if type(budget) is not int or budget <= 0 or budget > SQLITE_INT_MAX:
+        raise LiveAmoError("Enter a positive whole-rupee budget (e.g. 5000)")
+    return budget
+
+
 def editable_settings() -> dict:
     """Read saved operator preferences; never expose credentials or broker IDs."""
     with managed_db() as con:
@@ -155,8 +170,8 @@ def editable_settings() -> dict:
         "amo_enabled": bool(c["armed"]),
         "source": c["source"],
         "per_order_budget_inr": int(c["budget"]),
-        "budget_min_inr": 100,
-        "budget_max_inr": BUDGET_MAX,
+        "budget_min_inr": 1,
+        "budget_max_inr": None,
     }
 
 
@@ -173,8 +188,8 @@ def update_settings(*, source: str | None = None,
         raise LiveAmoError("Specify --source or --budget to edit settings")
     if source is not None and source not in ("TEST", "EARNINGS_PULSE", "BOTH"):
         raise LiveAmoError("Source must be TEST, EARNINGS_PULSE or BOTH")
-    if budget is not None and (type(budget) is not int or not 100 <= budget <= BUDGET_MAX):
-        raise LiveAmoError("Per-order budget must be whole INR from 100 to 1000")
+    if budget is not None:
+        validate_budget(budget)
     with managed_db() as con:
         con.execute("BEGIN IMMEDIATE")
         try:
@@ -185,15 +200,22 @@ def update_settings(*, source: str | None = None,
                 raise LiveAmoError("Verified Test Group ID is not configured")
             if watch.configured_log_group_id() is None:
                 raise LiveAmoError("Verified Log Group ID is not configured")
-            pending=con.execute(
-                """SELECT COUNT(*) FROM intents
-                   WHERE state IN ('RESERVED','PREPARING','SUBMITTING')"""
-            ).fetchone()[0]
-            if pending:
-                raise LiveAmoError(
-                    "An AMO is currently preparing/submitting; edit settings "
-                    "after its broker state has been reconciled"
-                )
+            # Budgets are snapshotted inside each intent at reservation.
+            # Editing the owner's budget therefore never changes an existing
+            # order, even if it is currently PREPARING or SUBMITTING.
+            # Source changes can interfere with the final broker submission
+            # gate; defer only that kind of change while an intent is in flight.
+            if source is not None and next_source != c["source"]:
+                pending=con.execute(
+                    """SELECT COUNT(*) FROM intents
+                       WHERE state IN ('RESERVED','PREPARING','SUBMITTING')"""
+                ).fetchone()[0]
+                if pending:
+                    raise LiveAmoError(
+                        "One order is currently being submitted. Source change "
+                        "is unavailable until its status is known; budget "
+                        "can still be edited."
+                    )
             con.execute(
                 "UPDATE control SET source=?,budget=? WHERE id=1",
                 (next_source,next_budget)
@@ -219,8 +241,7 @@ def trading_service_stopped() -> bool:
 def arm(*, source: str = "BOTH", budget: int = BUDGET_DEFAULT) -> dict:
     if source not in ("TEST","EARNINGS_PULSE","BOTH"):
         raise LiveAmoError("Invalid source")
-    if type(budget) is not int or not 100 <= budget <= BUDGET_MAX:
-        raise LiveAmoError("Budget must be whole INR from 100 to 1000")
+    validate_budget(budget)
     if not trading_service_stopped():
         raise LiveAmoError("Original trading_bot.service must be inactive AND disabled")
     if watch.configured_log_group_id() is None:
@@ -509,8 +530,8 @@ def execute(intent_id:int) -> None:
         security_id,tick=_verified_instrument(item["symbol"])
         budget=int(item["budget"])
         qty,price,quote_ts=_quote_and_size(item["symbol"],budget,tick)
-        if balance < qty*price+100:
-            raise LiveAmoError("Insufficient verified Dhan funds including ₹100 buffer")
+        if balance < qty*price:
+            raise LiveAmoError("Order value exceeds available Dhan funds")
         if not trading_service_stopped() or not _session_closed():
             raise LiveAmoError("Safety conditions changed before submission")
         if time.time()-item["alert_ts"]>MAX_SIGNAL_AGE:
@@ -534,9 +555,9 @@ def execute(intent_id:int) -> None:
                        ('SUBMITTING','UNKNOWN','ACKED','CANCEL_REQUESTED')""",
                     (intent_id,)
                 ).fetchone()[0]
-                if balance < float(pending_notional)+qty*price+100:
+                if balance < float(pending_notional)+qty*price:
                     raise LiveAmoError(
-                        "Insufficient broker funds after outstanding AMO commitments"
+                        "Order value exceeds Dhan funds after other pending orders"
                     )
                 changed=con.execute(
                     """UPDATE intents SET state='SUBMITTING',note=?,security_id=?,qty=?,price=?
@@ -764,7 +785,7 @@ def preflight() -> dict:
 
 def offline_self_test():
     assert _session_closed is not None
-    assert BUDGET_MAX==1000 and MAX_SIGNAL_AGE==90
+    assert SQLITE_INT_MAX == 9223372036854775807 and MAX_SIGNAL_AGE==90
     assert TEST_PREFIX=="[RBLIVEAMO] "
     with managed_db(Path("/tmp")/("amo_test_"+str(os.getpid())+".sqlite3")) as con:
         assert _control(con)["armed"]==0
