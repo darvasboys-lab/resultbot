@@ -206,6 +206,14 @@ def enqueue_test_log(con: sqlite3.Connection, group_id: int, message_id: int,
     return "test_queued" if cur.rowcount else "duplicate"
 
 
+def recent_test_candidate(sent_dt: datetime, now_utc: datetime, lookback_seconds: int = 900) -> bool:
+    """Limit startup history scanning to recently posted test-group messages."""
+    if sent_dt.tzinfo is None or now_utc.tzinfo is None:
+        return False
+    age = (now_utc - sent_dt).total_seconds()
+    return -120 <= age <= lookback_seconds
+
+
 def configured_test_group_id() -> int | None:
     """Read the existing authorized Test Group ID; never print or alter secrets."""
     from dotenv import dotenv_values
@@ -654,17 +662,62 @@ async def listen(con: sqlite3.Connection, *, interval: int = 75):
             LOG.warning("Excellent message %s needs manual stock-symbol review", m.id)
 
     client.add_event_handler(handler, events.NewMessage(chats=entity))
+    test_scan_task = None
     if test_entity is not None:
-        async def test_handler(event):
-            message = event.message
+        def record_test_message(message, source: str) -> str:
             verdict = enqueue_test_log(
                 con, test_id, message.id, message.date, message.raw_text or ""
             )
             if verdict == "test_queued":
-                print("[TEST EXCELLENT] Test group message queued for Log Group (no broker actions)",flush=True)
-            elif verdict not in ("not_marked_test","not_excellent","duplicate"):
-                LOG.info("TEST group ignored test message: %s",verdict)
+                print(
+                    f"[TEST EXCELLENT] {source}: queued for Log Group (no broker actions)",
+                    flush=True,
+                )
+            elif verdict not in ("not_marked_test", "not_excellent", "duplicate"):
+                LOG.info("Test Group message ignored (%s): %s", source, verdict)
+            return verdict
+
+        async def test_handler(event):
+            record_test_message(event.message, "LIVE EVENT")
         client.add_event_handler(test_handler, events.NewMessage(chats=test_entity))
+
+        async def test_history_poller():
+            # Telethon may not emit an incoming NewMessage update for posts sent by
+            # the same logged-in Telegram account. Poll *only the verified test
+            # group* as a fallback; never touch Earnings Pulse research history.
+            # The first scan can recover a marked message from the last 15 mins.
+            first = True
+            while True:
+                total = 0
+                marked = 0
+                accepted = 0
+                try:
+                    moment = datetime.now(timezone.utc)
+                    async for m in client.iter_messages(test_entity, limit=40):
+                        total += 1
+                        if not recent_test_candidate(m.date, moment):
+                            continue
+                        text = m.raw_text or ""
+                        if not text.startswith(TEST_MARKER + " "):
+                            continue
+                        marked += 1
+                        if record_test_message(m, "HISTORY POLL") == "test_queued":
+                            accepted += 1
+                    if first:
+                        print(
+                            f"[TEST SCAN] Test Group history readable: {total} recent entries checked, "
+                            f"{marked} marked tests seen, {accepted} newly queued. "
+                            "Send a fresh [RBTEST] message if none appear.",
+                            flush=True,
+                        )
+                        first = False
+                except asyncio.CancelledError:
+                    raise
+                except Exception as exc:
+                    LOG.warning("Test Group history poll failed: %s", type(exc).__name__)
+                await asyncio.sleep(30)
+
+        test_scan_task = asyncio.create_task(test_history_poller())
         print("[TEST] Send to test group: [RBTEST] #ROLEXRINGS - 🏆🔥 Excellent Results",flush=True)
         print("[TEST] Also send: [RBTEST] #ROLEXRINGS - 🌟 Great Results (must stay silent)",flush=True)
     for attempt in range(4):
@@ -701,6 +754,7 @@ async def listen(con: sqlite3.Connection, *, interval: int = 75):
     finally:
         poll.cancel()
         log_task.cancel()
+        if test_scan_task: test_scan_task.cancel()
         if guard: guard.cancel()
         await client.disconnect()
 
