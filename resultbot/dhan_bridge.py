@@ -323,6 +323,7 @@ def main():
     parser=argparse.ArgumentParser(description="ResultBot verified Dhan GET-only bridge (no broker mutations)")
     sub=parser.add_subparsers(dest="command",required=True)
     sub.add_parser("self-test")
+    sub.add_parser("check",help="verify Dhan live API without sending or queuing notifications")
     sub.add_parser("connect",help="verify Dhan live API and enqueue one connection card")
     sub.add_parser("recent-alerts",help="list captured Excellent Telegram IDs (not broker orders)")
     sub.add_parser("links",help="list only explicitly paired broker order status")
@@ -337,13 +338,16 @@ def main():
     con=watch.setup_db()
     try:
         ensure_schema(con)
-        if args.command=="connect":
-            result=connect(con,notify=True)
+        if args.command in ("check","connect"):
+            result=connect(con,notify=args.command=="connect")
             print("CONNECTED: DhanHQ v2 READ-ONLY | Account:",result["account"])
             print("Token validity:",result["token_validity"])
             print("Today's broker orders:",result["orders_today"])
             print("Today's broker trades:",result["trades_today"])
-            print("Dhan connection card queued for existing ResultBot Log Group.")
+            if args.command=="connect":
+                print("Dhan connection card queued for existing ResultBot Log Group.")
+            else:
+                print("Dry connection check only; no Log Group card queued.")
             print("No broker orders were submitted or attributed.")
         elif args.command=="recent-alerts":
             recent_alerts(con)
