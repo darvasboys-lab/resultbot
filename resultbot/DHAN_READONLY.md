@@ -1,15 +1,46 @@
 # ResultBot — DhanHQ read-only account connection
 
-This standalone module connects the ResultBot VM to **DhanHQ API v2** for profile, account binding, configured IPs, and actual daily order/trade inspection.
+This standalone module connects the ResultBot VM to **DhanHQ API v2** for profile, account binding, configured IPs, **live verified funds**, and actual daily order/trade inspection.
 
 ## Security boundaries
 
-- Absolutely **no order placement, modification, cancellation or token renewal**: allowlisted GET requests only to `/profile`, `/ip/getIP`, `/orders`, `/orders/{numeric order id}`, `/trades`.
+- Absolutely **no order placement, modification, or cancellation**: allowlisted account-data GET requests only to `/profile`, `/ip/getIP`, `/fundlimit`, `/orders`, `/orders/{numeric order id}`, `/trades`. The existing separate TOTP-authentication and renewal commands remain unchanged.
 - This file is independent from `trading_bot.service` and `resultbot-excellent-watch.service`. Importing or running it does not start trading, change Telegram sessions, or modify the Excellent research database.
 - The only credential copy for ResultBot read-only diagnostics is `~/resultbot-data/.dhan_readonly.json`, written with mode `0600` under an `0700` directory after a matching `GET /profile` response. **Never** commit, upload, send, log, or paste this file or the token into chat.
 - Do not silently reuse another VM's or another bot's token. Account ID must match the Dhan API profile exactly. Order and trade rows are also account-verified, and unrelated trades cannot be linked to an Excellent alert by symbol alone.
 - No Automatic Telegram broker response yet: the order/trade queries are manual. A future verified order-correlation layer is required to send Dhan-verified execution status cards.
 - Dhan access tokens have a **24-hour lifetime**. The optional isolated `resultbot-dhan-token-refresh.timer` renews automatically at **08:00 IST every day**, including weekends, and catches up after reboot when user lingering is enabled. The timer is not tied to `trading_bot.service` and never submits orders. A manual or automated refresh first verifies account identity; any failed renewal preserves the previous working token.
+
+## Live trading balance — verified broker read, no AMO
+
+DhanHQ v2 provides the official **GET /fundlimit** endpoint. ResultBot's
+`funds` command validates its current token against `GET /profile`
+before reading the fund response. Both replies must carry the **same**
+Dhan client ID; the VM prints only a masked account identifier, numeric
+values and token expiry. It never logs the access token.
+
+```bash
+~/uditbot/venv/bin/python ~/resultbot-data/dhan_readonly.py funds
+```
+
+`balance` is an alias for `funds`.
+
+The report includes available to trade (`availabelBalance` — this is
+the field's **actual spelling** in DhanHQ v2), utilised funds, withdrawable
+balance, start-of-day limit, collateral, receivables and blocked payouts.
+If optional fields are absent, it prints **NOT PROVIDED** rather than zero.
+If the required available-balance field is missing, negative, nonnumeric
+or account-mismatched, it errors instead of reporting false balance.
+A verified zero is shown as `INR 0.00` (not an error).
+
+The values reflect a new Dhan funds API response retrieved at the printed
+IST timestamp; they are **not** evidence of eligibility to place any
+particular order or of broker AMO margin acceptance. No broker mutation
+endpoints are called, and neither the research listener nor token-refresh
+systemd timer is modified.
+
+The official DhanHQ v2 specification:
+https://dhanhq.co/docs/v2/funds/
 
 ## VM deployment
 
