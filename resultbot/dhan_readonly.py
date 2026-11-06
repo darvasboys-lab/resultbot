@@ -18,7 +18,8 @@ import sys
 import tempfile
 from pathlib import Path
 from urllib.error import HTTPError, URLError
-from urllib.request import Request, urlopen
+from urllib.request import Request, urlopen, build_opener, HTTPRedirectHandler
+from urllib.parse import urlencode
 
 BASE = "https://api.dhan.co/v2"
 ROOT = Path.home() / "resultbot-data"
@@ -174,6 +175,85 @@ def display_account(account: str) -> str:
     return "***" + account[-4:]
 
 
+
+class _NeverRedirect(HTTPRedirectHandler):
+    """Do not follow auth redirects carrying transient PIN/TOTP query values."""
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+def token_from_pin_totp(account: str, pin: str, totp: str) -> str:
+    """Generate a 24-hour Dhan token; do NOT store PIN, TOTP or TOTP seed.
+
+    This is the only non-GET call in this module. Dhan documents these
+    parameters in a POST HTTPS query string, so do not log the URL.
+    """
+    if not valid_account(account):
+        raise DhanReadError("Invalid Dhan Client ID")
+    if not re.fullmatch(r"[0-9]{6}", pin or ""):
+        raise DhanReadError("Dhan PIN must contain exactly 6 digits")
+    if not re.fullmatch(r"[0-9]{6}", totp or ""):
+        raise DhanReadError("TOTP must contain exactly 6 digits")
+    url = "https://auth.dhan.co/app/generateAccessToken?" + urlencode({
+        "dhanClientId": account,
+        "pin": pin,
+        "totp": totp,
+    })
+    request = Request(url, data=b"", method="POST", headers={
+        "Accept":"application/json",
+        "User-Agent":"ResultBot-Dhan-Auth/1.0",
+    })
+    try:
+        with build_opener(_NeverRedirect()).open(request, timeout=12) as reply:
+            if reply.status != 200:
+                raise DhanReadError("Dhan token generation returned an unexpected status")
+            raw = reply.read(200_001)
+            if len(raw) > 200_000:
+                raise DhanReadError("Dhan authentication response exceeded size limit")
+            data = json.loads(raw)
+    except HTTPError as exc:
+        # Never expose exc.url, which contains the PIN and TOTP.
+        raise DhanReadError("Dhan TOTP authentication rejected (HTTP %d). Check PIN, current code and clock." % exc.code) from None
+    except (URLError, TimeoutError, OSError):
+        raise DhanReadError("Dhan authentication connection failed; check connectivity") from None
+    except (ValueError, UnicodeDecodeError):
+        raise DhanReadError("Dhan authentication returned invalid JSON") from None
+    if not isinstance(data, dict):
+        raise DhanReadError("Dhan authentication returned an unexpected response")
+    if str(data.get("dhanClientId") or "") != account:
+        raise DhanReadError("Dhan generated a token for a different client ID; refusing it")
+    token = data.get("accessToken")
+    if not validate_token(token):
+        raise DhanReadError("Dhan authentication did not return a valid access token")
+    return token
+
+
+def do_setup_totp() -> None:
+    if not sys.stdin.isatty():
+        raise DhanReadError("TOTP setup requires an interactive VM terminal")
+    print("DhanHQ PIN + authenticator TOTP: issue a new 24-hour token.")
+    print("Dhan supports up to five active tokens. This is not automatic renewal.")
+    print("PIN and current TOTP are never saved or printed by this tool.")
+    confirm = input("Type GENERATE to request a fresh Dhan token: ").strip()
+    if confirm != "GENERATE":
+        print("Cancelled: no Dhan request made.")
+        return
+    account = input("Dhan Client ID: ").strip()
+    if not valid_account(account):
+        raise DhanReadError("Dhan Client ID must be numeric")
+    pin = getpass.getpass("6-digit Dhan PIN (hidden): ").strip()
+    totp = getpass.getpass("Current 6-digit authenticator TOTP (hidden): ").strip()
+    token = token_from_pin_totp(account, pin, totp)
+    # A generated token is never persisted without independent broker
+    # profile verification that its account matches user input.
+    profile = verified_profile(account, token)
+    store_credentials(account, token)
+    print("SUCCESS: Dhan TOTP login verified, token saved privately (0600).")
+    print("Verified Dhan account:", display_account(account))
+    print("Token validity:", str(profile.get("tokenValidity") or "Not supplied"))
+    print("PIN/TOTP were NOT saved; trading remains disabled.")
+
+
 def do_setup() -> None:
     if not sys.stdin.isatty():
         raise DhanReadError("Credential setup requires an interactive terminal")
@@ -263,6 +343,13 @@ def self_test() -> None:
     assert fill_info({"orderStatus":"PART_TRADED","quantity":10,"filledQty":3,"averageTradedPrice":123.45}) == ("PART_TRADED","3/10","₹123.45")
     assert fill_info({"orderStatus":"TRADED","quantity":10,"filledQty":10,"averageTradedPrice":0})[2] == "N/A"
     assert display_account("1100008885") == "***8885"
+    for malformed_pin, malformed_totp in (("12345","123456"),("123456",""),("PINCODE","123456")):
+        try:
+            token_from_pin_totp("1100008885",malformed_pin,malformed_totp)
+        except DhanReadError:
+            pass
+        else:
+            raise AssertionError("Unsafe authentication credential accepted")
     print("PASS: Dhan GET-only allowlist, broker fill verification, account masking")
 
 
@@ -270,7 +357,8 @@ def main() -> None:
     ap = argparse.ArgumentParser(description="ResultBot standalone DhanHQ v2 GET-only client (no trading)")
     sub = ap.add_subparsers(dest="command", required=True)
     sub.add_parser("self-test")
-    sub.add_parser("setup", help="privately enter new ResultBot token and verify before saving")
+    sub.add_parser("setup", help="privately enter a pre-generated Dhan access token")
+    sub.add_parser("setup-totp", help="generate new access token using hidden Dhan PIN plus 6-digit TOTP")
     sub.add_parser("check", help="verify Dhan profile, account identity and registered IPs")
     p=sub.add_parser("orders",help="list today\\'s order statuses with verified fill prices")
     p.add_argument("--limit",type=int,default=10,choices=range(1,21),metavar="1-20")
@@ -284,6 +372,9 @@ def main() -> None:
         return
     if args.command=="setup":
         do_setup()
+        return
+    if args.command=="setup-totp":
+        do_setup_totp()
         return
     account, token = load_credentials()
     if args.command=="check":
