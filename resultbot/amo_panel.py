@@ -87,6 +87,8 @@ input,select{{padding:9px;margin:6px}}table{{width:100%;border-collapse:collapse
 <h1>ResultBot — Real Dhan Equity AMO</h1><section><h2>Trading switch: {which}</h2>
 <p class="warn"><b>REAL ORDER:</b> ON arms ONE NSE_EQ CNC LIMIT BUY AMO for a NEW eligible alert (10-minute limit).
 OFF stops future orders but never cancels an existing one. Cancellation may fail; an AMO may fill at market open.
+<b>There is no automatic stop-loss/target if the AMO fills.</b>
+You must manage any resulting holding yourself.
 One attempt per IST day. Maximum ₹1000 notional, default ₹500.</p>
 <form method="POST" action="/arm"><input name="csrf" type="hidden" value="{self.server.csrf}">
 <label>Source: <select name="source"><option value="TEST">Verified Test Group (RBLIVEAMO)</option>
