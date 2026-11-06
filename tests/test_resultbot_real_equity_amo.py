@@ -119,6 +119,80 @@ class RealEquityAmoTests(unittest.TestCase):
             self.assertEqual(get_request.call_count,1)
             pause.assert_not_called()
 
+    def test_edit_saved_budget_and_source_preserves_switch_and_order_state(self):
+        self.armed()
+        first=live.reserve("TEST",710,"YESBANK",int(time.time()))
+        # Existing reserved signal is frozen to its original budget.
+        saved_before=live._intent(first)
+        old_control=live.status()
+        live._update(first,"ACKED",order_id=OID,security_id="1333",
+                     qty=5,price=20.0,broker_status="PENDING")
+        with patch.object(live,"_dhan_http") as broker:
+            edited=live.update_settings(source="BOTH",budget=750)
+            broker.assert_not_called()
+        self.assertEqual(edited["per_order_budget_inr"],750)
+        self.assertEqual(edited["source"],"BOTH")
+        self.assertTrue(edited["amo_enabled"])
+        after=live.status()
+        self.assertTrue(after["effective_on"])
+        self.assertEqual(after["stop_seq"],old_control["stop_seq"])
+        self.assertEqual(after["arm_seq"],old_control["arm_seq"])
+        self.assertEqual(after["armed_since"],old_control["armed_since"])
+        self.assertEqual(live._intent(first)["budget"],saved_before["budget"])
+        self.assertEqual(live._intent(first)["order_id"],OID)
+        second=live.reserve("EARNINGS_PULSE",711,"TRIDENT",int(time.time()))
+        self.assertIsInstance(second,int)
+        self.assertEqual(live._intent(second)["budget"],750)
+
+    def test_edit_settings_while_off_does_not_implicitly_enable_real_trading(self):
+        with patch.object(live,"_verified_broker_context") as funds, \
+             patch.object(live,"_dhan_http") as real_post:
+            result=live.update_settings(source="TEST",budget=650)
+            funds.assert_not_called()
+            real_post.assert_not_called()
+        self.assertFalse(result["amo_enabled"])
+        self.assertFalse(live.status()["effective_on"])
+        self.assertEqual(result["source"],"TEST")
+        self.assertEqual(result["per_order_budget_inr"],650)
+
+    def test_edit_settings_rejects_invalid_values_without_mutating(self):
+        baseline=live.editable_settings()
+        for bad in ("", "UNVERIFIED", "ALL", "BANKNIFTY"):
+            with self.assertRaises(live.LiveAmoError):
+                live.update_settings(source=bad)
+        for bad in (-100,0,99,1001,2000,True,500.5,"500"):
+            with self.assertRaises(live.LiveAmoError):
+                live.update_settings(budget=bad)
+        with self.assertRaises(live.LiveAmoError):
+            live.update_settings()
+        self.assertEqual(live.editable_settings(),baseline)
+
+    def test_no_settings_edits_during_pre_submission_intent(self):
+        first=self.reserved()
+        before=live.editable_settings()
+        for state in ("RESERVED","PREPARING","SUBMITTING"):
+            live._update(first,state)
+            with self.assertRaisesRegex(live.LiveAmoError,
+                                        "preparing/submitting"):
+                live.update_settings(source="BOTH",budget=900)
+        self.assertEqual(live.editable_settings(),before)
+        live._update(first,"ACKED",order_id=OID,security_id="1333",
+                     broker_status="PENDING")
+        self.assertEqual(live.update_settings(budget=700)["per_order_budget_inr"],700)
+
+    def test_bare_cli_arm_uses_saved_operator_budget_and_source(self):
+        from contextlib import redirect_stdout
+        import io,sys
+        live.update_settings(source="TEST",budget=700)
+        capture=io.StringIO()
+        with patch.object(sys,"argv",["equity_amo_live.py","arm" ]), \
+             redirect_stdout(capture):
+            live.main()
+        self.assertEqual(live.status()["budget"],700)
+        self.assertEqual(live.status()["source"],"TEST")
+        self.assertTrue(live.status()["effective_on"])
+        self.assertIn('"budget": 700',capture.getvalue())
+
     def test_no_old_alert_and_no_wrong_source(self):
         self.armed()
         self.assertIsNone(live.reserve("EARNINGS_PULSE",9,"YESBANK",int(time.time())))
