@@ -309,9 +309,16 @@ async def telegram_client():
             raise RuntimeError("Saved TG_SESSION_STRING is not authorized; no OTP attempted")
         print("[TELEGRAM] Using existing ResultBot login; no new OTP required",flush=True)
     else:
-        # Fresh session remains available when no portable authorization exists.
+        # Never unexpectedly ask for OTP during backfill or background listening.
+        # An already-authorized independent session can still be used.
         client = TelegramClient(str(SESSION), api_id, api_hash)
-        await client.start()
+        await client.connect()
+        if not await client.is_user_authorized():
+            await client.disconnect()
+            raise RuntimeError(
+                "No authorized Telegram session found. Export the existing session "
+                "to TG_SESSION_STRING in ~/uditbot/.env; no new OTP was requested."
+            )
     entity = await client.get_entity(CHANNEL)
     if int(entity.id) != CHANNEL_ID:
         await client.disconnect()
