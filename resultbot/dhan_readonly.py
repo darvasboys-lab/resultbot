@@ -8,12 +8,18 @@ Telegram notifications, or broker mutations. Not imported by trading_bot.
 from __future__ import annotations
 
 import argparse
+import base64
+import binascii
+import hashlib
+import hmac
 import getpass
 import json
 import math
 import os
 import re
 import stat
+import struct
+import time
 import sys
 import tempfile
 from pathlib import Path
@@ -182,6 +188,46 @@ class _NeverRedirect(HTTPRedirectHandler):
         return None
 
 
+def current_totp_from_secret(secret: str, *, timestamp: float | None = None) -> str:
+    """Convert a TOTP setup key to the CURRENT 6-digit RFC 6238 code in memory.
+
+    Neither the setup secret nor generated code is persisted, logged or printed.
+    Only standard 30-second HMAC-SHA1 TOTP is supported.
+    """
+    if not isinstance(secret, str):
+        raise DhanReadError("TOTP setup key must be text")
+    clean = "".join(secret.upper().split()).replace("-", "")
+    if not 16 <= len(clean) <= 128 or not re.fullmatch(r"[A-Z2-7]+", clean):
+        raise DhanReadError(
+            "Invalid TOTP setup key: use the 16-character Base32 key, "
+            "or the current 6-digit code from your authenticator"
+        )
+    padded = clean + ("=" * ((-len(clean)) % 8))
+    try:
+        key = base64.b32decode(padded, casefold=True)
+    except (binascii.Error, ValueError) as exc:
+        raise DhanReadError("TOTP setup key could not be decoded") from None
+    if len(key) < 10:
+        raise DhanReadError("TOTP setup key is too short")
+    now = time.time() if timestamp is None else timestamp
+    try:
+        counter = int(now // 30)
+        digest = hmac.new(key, struct.pack(">Q",counter), hashlib.sha1).digest()
+    except (TypeError,ValueError,OverflowError):
+        raise DhanReadError("Invalid time for TOTP code generation") from None
+    offset = digest[-1] & 0x0F
+    truncated = struct.unpack(">I",digest[offset:offset+4])[0] & 0x7fffffff
+    return str(truncated % 1000000).zfill(6)
+
+
+def normalize_totp_input(input_value: str) -> str:
+    """Accept either current 6 digits or a secret key; do not retain secret."""
+    candidate = str(input_value or "").strip()
+    if re.fullmatch(r"[0-9]{6}",candidate):
+        return candidate
+    return current_totp_from_secret(candidate)
+
+
 def token_from_pin_totp(account: str, pin: str, totp: str) -> str:
     """Generate a 24-hour Dhan token; do NOT store PIN, TOTP or TOTP seed.
 
@@ -233,7 +279,7 @@ def do_setup_totp() -> None:
         raise DhanReadError("TOTP setup requires an interactive VM terminal")
     print("DhanHQ PIN + authenticator TOTP: issue a new 24-hour token.")
     print("Dhan supports up to five active tokens. This is not automatic renewal.")
-    print("PIN and current TOTP are never saved or printed by this tool.")
+    print("PIN, TOTP setup key and current TOTP are never saved or printed.")
     confirm = input("Type GENERATE to request a fresh Dhan token: ").strip()
     if confirm != "GENERATE":
         print("Cancelled: no Dhan request made.")
@@ -242,7 +288,11 @@ def do_setup_totp() -> None:
     if not valid_account(account):
         raise DhanReadError("Dhan Client ID must be numeric")
     pin = getpass.getpass("6-digit Dhan PIN (hidden): ").strip()
-    totp = getpass.getpass("Current 6-digit authenticator TOTP (hidden): ").strip()
+    totp_input = getpass.getpass(
+        "6-digit TOTP code OR existing 16-character setup key (hidden): "
+    ).strip()
+    # Derive a current TOTP locally, in RAM only, directly before authentication.
+    totp = normalize_totp_input(totp_input)
     token = token_from_pin_totp(account, pin, totp)
     # A generated token is never persisted without independent broker
     # profile verification that its account matches user input.
@@ -251,7 +301,7 @@ def do_setup_totp() -> None:
     print("SUCCESS: Dhan TOTP login verified, token saved privately (0600).")
     print("Verified Dhan account:", display_account(account))
     print("Token validity:", str(profile.get("tokenValidity") or "Not supplied"))
-    print("PIN/TOTP were NOT saved; trading remains disabled.")
+    print("PIN/TOTP/setup key were NOT saved; trading remains disabled.")
 
 
 def do_setup() -> None:
@@ -343,6 +393,9 @@ def self_test() -> None:
     assert fill_info({"orderStatus":"PART_TRADED","quantity":10,"filledQty":3,"averageTradedPrice":123.45}) == ("PART_TRADED","3/10","₹123.45")
     assert fill_info({"orderStatus":"TRADED","quantity":10,"filledQty":10,"averageTradedPrice":0})[2] == "N/A"
     assert display_account("1100008885") == "***8885"
+    assert current_totp_from_secret("GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ",timestamp=59) == "287082"
+    assert normalize_totp_input("654321") == "654321"
+    assert len(normalize_totp_input("JBSWY3DPEHPK3PXP")) == 6
     for malformed_pin, malformed_totp in (("12345","123456"),("123456",""),("PINCODE","123456")):
         try:
             token_from_pin_totp("1100008885",malformed_pin,malformed_totp)
@@ -358,7 +411,7 @@ def main() -> None:
     sub = ap.add_subparsers(dest="command", required=True)
     sub.add_parser("self-test")
     sub.add_parser("setup", help="privately enter a pre-generated Dhan access token")
-    sub.add_parser("setup-totp", help="generate new access token using hidden Dhan PIN plus 6-digit TOTP")
+    sub.add_parser("setup-totp", help="generate access token using hidden PIN and 6-digit code OR 16-character TOTP key")
     sub.add_parser("check", help="verify Dhan profile, account identity and registered IPs")
     p=sub.add_parser("orders",help="list today\\'s order statuses with verified fill prices")
     p.add_argument("--limit",type=int,default=10,choices=range(1,21),metavar="1-20")
