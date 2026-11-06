@@ -16,7 +16,7 @@ otherwise):
 1. **Alert source:** `TEST` (authenticated owner messages in the configured
    Test Group), `EARNINGS_PULSE` (new official Excellent Results alerts), or
    `BOTH`. Selecting BOTH while AMO is ON authorizes real orders from both.
-2. **Per-order budget:** whole INR `100`–`1000`, default `500`.
+2. **Per-order budget:** owner-entered positive whole INR amount (no arbitrary upper budget cap), default `500`.
    This is per AMO, not a daily/order-count limit. The chosen amount is
    preserved after switching AMO OFF and ON again.
 3. **Master YES / NO:** opens the existing safe terminal toggle.
@@ -31,10 +31,7 @@ listener. New settings take effect for future Telegram messages without a
 listener restart. Existing order intents retain their originally captured
 budget, correlation ID, security ID and broker status.
 
-Changes are temporarily refused if a real order is currently in the
-`RESERVED`, `PREPARING` or `SUBMITTING` stage. Once that order's status is
-reconciled with Dhan, edit settings normally. This safeguards the transition
-to a real broker POST.
+Budget changes are saved for **future orders only**, even if an existing AMO is pending or submitting. Only source changes are briefly deferred while an order is RESERVED, PREPARING or SUBMITTING because those could affect an in-flight submission.
 
 ## Direct commands, if preferred
 
@@ -82,3 +79,5 @@ NO blocks new submissions, but an already-accepted AMO can remain pending
 or fill later. To cancel a specific ResultBot-owned Dhan order, use its
 intent ID in the explicit `equity_amo_live.py cancel --intent-id ...` command,
 and check for broker-confirmed `CANCELLED`.
+
+The quantity for each new signal is `floor(chosen INR budget / verified Yahoo-derived LIMIT price)`, and Dhan broker funds must be sufficient. Real Dhan order validity and duplicate suppression are maintained, but these are not arbitrary user-budget or daily order-count limits. The bot never automatically submits a second order if an earlier broker POST outcome is ambiguous.
