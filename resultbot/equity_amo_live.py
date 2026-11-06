@@ -129,8 +129,11 @@ def arm(*, source: str = "TEST", budget: int = BUDGET_DEFAULT) -> dict:
         raise LiveAmoError("Budget must be whole INR from 100 to 1000")
     if not trading_service_stopped():
         raise LiveAmoError("Original trading_bot.service must be inactive AND disabled")
+    if not _session_closed():
+        raise LiveAmoError("Real Equity AMO can only be armed in a closed-market window")
     account, token=dh.load_credentials()
-    dh.verified_profile(account,token)
+    # Read-only live permission checks before ON; fail closed on unlisted IP.
+    _verified_broker_context(account,token)
     with connect_db() as con:
         con.execute("BEGIN IMMEDIATE")
         try:
@@ -341,7 +344,7 @@ def _broker_card(intent:dict,summary:str) -> str:
        f"🧾 Dhan order ID: <b>{escape(intent['order_id'] or 'UNCONFIRMED')}</b>",
        f"📋 Broker status: {escape(intent['broker_status'] or intent['state'])}",
        f"💵 CNC LIMIT ₹{intent['price']:.2f} × {intent['qty']}",
-       "⚠️ REAL brokerage order. AMO is not a fill; cancellation requires broker confirmation.",
+       "⚠️ REAL brokerage order. OFF does not cancel it; partial fills remain owned even after cancellation.",
     ))
 
 
@@ -478,10 +481,14 @@ def request_cancel(intent_id:int,automatic:bool=False) -> str:
     detail=_verify_owned_order(item,token)
     status=str(detail.get("orderStatus") or "").upper()
     filled=dh.checked_number(detail.get("filledQty"))
-    if status in TERMINAL or (filled is not None and filled>0):
-        _update(intent_id,"TERMINAL" if status in TERMINAL else "UNKNOWN",
-                broker_status=status,note="Order already filled/terminal; cancellation not possible")
+    if status in TERMINAL:
+        _update(intent_id,"TERMINAL",
+                broker_status=status,note="Order already terminal; cannot cancel")
         return status
+    # PART_TRADED still has a cancellable pending remainder; an existing
+    # filled portion cannot be undone and must be managed separately.
+    if status not in ("TRANSIT","PENDING","PART_TRADED"):
+        raise LiveAmoError("Unrecognized broker state; cancellation blocked")
     # Lock and claim ONE cancellation attempt only after broker preflight succeeds.
     with connect_db() as con:
         claim=con.execute(
@@ -594,7 +601,7 @@ def monitor() -> int:
                 _queue(newest,"REAL_AMO_"+re.sub("[^A-Z0-9]","_",status),
                        _broker_card(newest,"Broker-confirmed update; filled="+str(filled)))
                 changed+=1
-            if status in ("TRANSIT","PENDING") and (filled is None or filled==0):
+            if status in ("TRANSIT","PENDING","PART_TRADED"):
                 if item["cancel_after"] and int(time.time())>=item["cancel_after"] and not item["cancel_attempted"]:
                     outcome=request_cancel(intent_id,automatic=True)
                     newest=_intent(intent_id)
