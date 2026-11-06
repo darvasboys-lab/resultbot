@@ -1,0 +1,12 @@
+[Unit]
+Description=Check for bot-owned orphaned Forever OCO every 20s (opt-in)
+
+[Timer]
+OnBootSec=120s
+OnUnitInactiveSec=20s
+AccuracySec=1s
+Persistent=false
+Unit=uditbot-orphan-oco-cleanup.service
+
+[Install]
+WantedBy=timers.target
