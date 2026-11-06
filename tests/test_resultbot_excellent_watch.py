@@ -167,6 +167,48 @@ class ExcellentOnlyTests(unittest.TestCase):
         ):
             self.assertIsNone(ew.parse_test_alert(invalid)[0])
 
+    def test_real_amo_test_group_owner_accepts_plain_excellent_when_eligible(self):
+        from resultbot import excellent_watch as ew
+        messages=(
+            "#YESBANK - 🏆🔥 Excellent Results",
+            "[RBLIVEAMO] #YESBANK - 🏆🔥 Excellent Results",
+            "#RAMKY - Excellent Results",
+        )
+        for m in messages:
+            symbol, reason=ew.eligible_owner_test_amo(
+                m,"test_queued",sender_id=555,owner_id=555)
+            self.assertEqual((symbol,reason),("YESBANK" if "YESBANK" in m else "RAMKY","excellent"))
+
+    def test_real_amo_test_group_rejects_replay_sender_and_old_preview(self):
+        from resultbot import excellent_watch as ew
+        msg="#YESBANK - 🏆🔥 Excellent Results"
+        for verdict in ("duplicate","not_excellent","invalid_test_source"):
+            symbol,reason=ew.eligible_owner_test_amo(msg,verdict,555,555)
+            self.assertIsNone(symbol)
+            self.assertEqual(reason,"not_new_test_alert")
+        for sender,owner in ((None,555),(444,555),(555,None)):
+            symbol,reason=ew.eligible_owner_test_amo(msg,"test_queued",sender,owner)
+            self.assertIsNone(symbol)
+            self.assertEqual(reason,"not_owner")
+        for text in (
+            "[RBAMO] #YESBANK - Excellent Results",
+            "[RBTEST] #YESBANK - Excellent Results",
+        ):
+            symbol,reason=ew.eligible_owner_test_amo(text,"test_queued",555,555)
+            self.assertIsNone(symbol)
+            self.assertEqual(reason,"legacy_simulation_only")
+        symbol,reason=ew.eligible_owner_test_amo(
+            "[OTHER] #YESBANK - Excellent Results","test_queued",555,555)
+        self.assertIsNone(symbol)
+        self.assertEqual(reason,"unknown_test_prefix")
+        for invalid in (
+            "#YESBANK - 🌟 Great Results",
+            "#YESBANK #TRIDENT - Excellent Results",
+            "Hello friend",
+        ):
+            symbol,reason=ew.eligible_owner_test_amo(invalid,"test_queued",555,555)
+            self.assertIsNone(symbol)
+
     def test_three_realistic_test_posts_not_saved_as_live_research(self):
         with tempfile.TemporaryDirectory() as d:
             con = ew.setup_db(Path(d)/"test.db")
@@ -194,7 +236,8 @@ class ExcellentOnlyTests(unittest.TestCase):
                 self.assertEqual(kind,"TEST_EXCELLENT_ALERT")
                 self.assertIn("#"+sym,card)
                 self.assertIn("NOT A REAL EARNINGS ALERT",card)
-                self.assertIn("NOT SUBMITTED",card)
+                self.assertIn("Telegram receipt",card)
+                self.assertIn("separate AMO card",card)
                 self.assertIn("execution price: n/a",card.lower())
             con.close()
 
