@@ -43,6 +43,31 @@ To check locally without sending any Telegram messages:
 ~/uditbot/venv/bin/python ~/resultbot-data/excellent_watch.py log-status
 ```
 
+## Test Group: safe end-to-end cross-check
+
+The existing `TEST_GROUP_ID` in `~/uditbot/.env` is used automatically; `RESULTBOT_TEST_GROUP_ID` can override it. Both require an already joined Telegram **group**, a signed negative chat ID, and an identity distinct from the Log Group and Earnings Pulse source. If the group is not resolved, the research listener continues without the test input.
+
+In the **Telegram Test Group only**, send **exactly** these two messages as separate posts:
+
+```text
+[RBTEST] #ROLEXRINGS - 🏆🔥 Excellent Results
+```
+
+```text
+[RBTEST] #ROLEXRINGS - 🌟 Great Results
+```
+
+Expected: the first produces **one** Telegram Log Group card starting `🧪 RESULTBOT TEST — EXCELLENT ONLY`, with Dhan order `NOT SUBMITTED` and execution price `N/A`. The second produces **no** Log Group notification. Neither creates a real `alerts` row, one-minute research candle, Dhan order or trade. The first message is deduplicated by test-chat/message ID; past test messages are not replayed on restart. Other messages without the exact `[RBTEST]` prefix do nothing.
+
+Check local delivery with:
+
+```bash
+~/uditbot/venv/bin/python ~/resultbot-data/excellent_watch.py log-status
+journalctl --user -u resultbot-excellent-watch.service -n 20 --no-pager
+```
+
+Look for `TEST_EXCELLENT_ALERT / SENT : 1` (or higher if tests were repeated). Telegram transport failures may produce `PENDING`; a configured destination alone does not prove delivery. The test is isolated from real market research and does not imply that any Dhan integration exists.
+
 ## Restrictions
 - No broker integration, trading, profit guarantee, historical minute coverage guarantee, or application-level Yahoo API SLA.
 - No `set -e` installation snippet; validate files before installing; never enable `trading_bot.service` as part of research.
