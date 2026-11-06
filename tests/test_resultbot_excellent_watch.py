@@ -1,5 +1,6 @@
 """Run offline: python -m unittest -v tests.test_resultbot_excellent_watch"""
 import io
+import asyncio
 import json
 import sqlite3
 import tempfile
@@ -94,6 +95,49 @@ class ExcellentOnlyTests(unittest.TestCase):
             self.assertEqual(session.dc_id, 2)
             self.assertEqual(session.port, 443)
             self.assertEqual(path.read_bytes(), before)
+
+
+    def test_research_log_card_never_claims_fill(self):
+        dt=datetime(2026,11,6,10,0,tzinfo=timezone.utc)
+        card=ew.format_excellent_log("ROLEXRINGS",int(dt.timestamp()))
+        self.assertIn("EXCELLENT RESULTS", card)
+        self.assertIn("#ROLEXRINGS", card)
+        self.assertIn("NOT SUBMITTED", card)
+        self.assertIn("execution price: N/A", card)
+        self.assertNotIn("Order Executed", card)
+        self.assertIn("\\n",card)
+
+    def test_live_notice_dedup_and_no_non_excellent(self):
+        with tempfile.TemporaryDirectory() as d:
+            con=ew.setup_db(Path(d)/"db.sqlite3")
+            t=datetime(2026,11,6,10,0,tzinfo=timezone.utc)
+            self.assertFalse(ew.enqueue_live_log(con,100))
+            self.assertEqual(ew.add_alert(con,100,t,"#ROLEXRINGS Excellent Results"),"stored")
+            self.assertTrue(ew.enqueue_live_log(con,100))
+            self.assertFalse(ew.enqueue_live_log(con,100))
+            self.assertEqual(ew.add_alert(con,101,t,"#GOOD Great Results"),"not_excellent")
+            self.assertFalse(ew.enqueue_live_log(con,101))
+            self.assertEqual(con.execute("SELECT COUNT(*) FROM log_outbox").fetchone()[0],1)
+            con.close()
+
+    def test_notification_delivery_once_per_live_alert(self):
+        with tempfile.TemporaryDirectory() as d:
+            con=ew.setup_db(Path(d)/"db.sqlite3")
+            t=datetime(2026,11,6,10,0,tzinfo=timezone.utc)
+            ew.add_alert(con,50,t,"#FOO Excellent Results")
+            ew.enqueue_live_log(con,50)
+            class FakeTelegram:
+                sent=[]
+                async def send_message(self,destination,text,**kwargs):
+                    self.sent.append((destination,text,kwargs))
+                    return object()
+            fake=FakeTelegram()
+            self.assertEqual(asyncio.run(ew.send_queued_logs(con,fake,"verified_group")),1)
+            self.assertEqual(asyncio.run(ew.send_queued_logs(con,fake,"verified_group")),0)
+            self.assertEqual(len(fake.sent),1)
+            self.assertIn("NOT SUBMITTED",fake.sent[0][1])
+            self.assertEqual(con.execute("SELECT state FROM log_outbox").fetchone()[0],"SENT")
+            con.close()
 
     def test_offline_self_test(self):
         ew.self_test()
