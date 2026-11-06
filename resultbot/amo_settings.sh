@@ -32,6 +32,16 @@ confirm() {
     fi
 }
 
+notice() {
+    local message="$1"
+    if [[ -t 0 ]] && command -v whiptail >/dev/null 2>&1; then
+        whiptail --title "ResultBot Settings" \
+          --msgbox "$message" 13 80 || true
+    else
+        printf '%s\\n' "$message"
+    fi
+}
+
 select_menu() {
     if [[ -t 0 ]] && command -v whiptail >/dev/null 2>&1; then
         whiptail --title "ResultBot — Edit Real AMO Settings" \
@@ -97,9 +107,7 @@ edit_source() {
     # confirmation and the actual write; handle that safely without exiting.
     local outcome
     if ! outcome="$("$PY" "$BOT" settings --source "$wanted" 2>&1)"; then
-        echo "Source unchanged; edit was blocked safely:"
-        echo "$outcome"
-        echo "Check 'View current settings and order intents' (menu 4)."
+        notice "Source unchanged; edit was blocked safely. $outcome. Check menu 4 for existing order states."
         return 0
     fi
     echo "$outcome"
@@ -128,8 +136,7 @@ edit_budget() {
     desired="${desired#"${desired%%[![:space:]]*}"}"
     desired="${desired%"${desired##*[![:space:]]}"}"
     if [[ ! "$desired" =~ ^[0-9]+$ ]]; then
-        echo "INVALID AMOUNT: Please enter whole rupees, e.g. 600."
-        echo "No settings were changed; still INR $current. Returning to menu."
+        notice "INVALID AMOUNT. Enter a whole number like 600. Your saved budget remains INR $current. Allowed: INR $min_budget–$max_budget."
         return 0
     fi
 
@@ -140,9 +147,7 @@ try:
     sys.exit(0 if lo <= n <= hi else 1)
 except ValueError:
     sys.exit(1)' "$desired" "$min_budget" "$max_budget"; then
-        echo "OUT OF RANGE: You entered INR $desired."
-        echo "The current per-order limit is INR $min_budget–$max_budget."
-        echo "Your saved budget remains INR $current. Returning to menu."
+        notice "OUT OF RANGE: You entered INR $desired. Allowed per-order budget: INR $min_budget–$max_budget. Saved budget remains INR $current. Please choose a supported amount, or request an explicit risk-limit change."
         return 0
     fi
 
@@ -158,9 +163,7 @@ except ValueError:
     # The live engine may reject an edit if an in-flight order is between
     # reservation and broker submission. Never terminate the entire menu.
     if ! outcome="$("$PY" "$BOT" settings --budget "$desired" 2>&1)"; then
-        echo "Budget unchanged: live settings check blocked this edit."
-        echo "$outcome"
-        echo "Check menu 4 for any unresolved Dhan order transition."
+        notice "Budget unchanged: live settings check blocked this edit. $outcome. Check menu 4 for any unresolved Dhan order transition."
         return 0
     fi
     echo "$outcome"
