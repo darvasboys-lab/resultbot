@@ -23,7 +23,14 @@ Then choose **one** secure authentication method in an interactive SSH terminal:
 ~/uditbot/venv/bin/python ~/resultbot-data/dhan_readonly.py setup-totp
 ```
 
-The CLI asks you to type `GENERATE`, enter your numeric Dhan Client ID, **6-digit Dhan PIN**, and the **current 6-digit TOTP from your authenticator app**. Both secret fields have hidden terminal input. No QR seed, PIN, or TOTP is stored. Dhan's documented login endpoint `POST https://auth.dhan.co/app/generateAccessToken` requires these values as **HTTPS query parameters**; the script does not print, log, redirect, or cache the sensitive URL. A 24-hour access token is saved only if an independent `GET /profile` confirms that it belongs to the entered account. This is the sole POST call, strictly limited to **authentication**. All broker/order operations remain GET-only. You may need to regenerate a fresh token after expiry.
+The CLI asks you to type `GENERATE`, enter your numeric Dhan Client ID, and your **6-digit Dhan PIN**. At the last prompt you may enter EITHER:
+
+- the current **6-digit TOTP code** shown in your authenticator app, OR
+- your existing **16-character Base32 TOTP setup key** from Dhan (letters A-Z and digits 2-7, not a 16-digit decimal OTP).
+
+Both are entered as **hidden input** in your VM terminal. If a setup key is entered, ResultBot computes the rotating 6-digit TOTP in memory using RFC 6238 HMAC-SHA1. It sends only that code to Dhan for authentication, **never the original setup key**. The key, 6-digit PIN and temporary TOTP code are not saved or logged. If you have a 16-digit numeric value containing 0/1/8/9, it is not a standard Base32 TOTP setup key; use the authenticator-generated 6-digit code instead.
+
+Dhan's documented token endpoint `POST https://auth.dhan.co/app/generateAccessToken` uses the account ID, PIN and 6-digit TOTP as HTTPS query parameters; the connector does not log or follow redirects containing these values. A resulting 24-hour access token is saved only after `GET /profile` confirms the account. **This is the only POST: strictly for authentication. All order APIs are GET-only.** Never paste credentials, QR codes, secrets, or tokens into ChatGPT, shell command arguments, GitHub, or log files.
 
 **Alternative when you already generated the Access Token in Dhan Web:**
 
