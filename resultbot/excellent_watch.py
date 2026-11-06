@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """ResultBot Excellent Results: read-only Telegram collection + verifiable 1m Yahoo research.
 
-This module contains NO Dhan imports, order entry, trading-engine imports or Telegram send.
+This module contains NO Dhan imports, order entry or trading-engine imports.
+It can send Excellent-only RESEARCH alert notices to the verified Log Group.
 It never runs the trading_bot.service and never trades.
 """
 from __future__ import annotations
@@ -9,6 +10,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+from html import escape
 import logging
 import math
 import os
@@ -90,6 +92,19 @@ def setup_db(path: Path = DB) -> sqlite3.Connection:
         checked_utc INTEGER NOT NULL,
         details TEXT NOT NULL
       );
+      CREATE TABLE IF NOT EXISTS log_outbox (
+        id INTEGER PRIMARY KEY,
+        channel_id INTEGER NOT NULL,
+        message_id INTEGER NOT NULL,
+        kind TEXT NOT NULL DEFAULT 'EXCELLENT_ALERT',
+        text_html TEXT NOT NULL,
+        state TEXT NOT NULL DEFAULT 'PENDING',
+        created_utc INTEGER NOT NULL,
+        last_try_utc INTEGER NOT NULL DEFAULT 0,
+        attempts INTEGER NOT NULL DEFAULT 0,
+        sent_utc INTEGER,
+        UNIQUE(channel_id,message_id,kind)
+      );
     """)
     return con
 
@@ -106,6 +121,124 @@ def add_alert(con: sqlite3.Connection, message_id: int, sent_dt: datetime, text:
         (channel_id,message_id,symbol,sent_utc,inserted_utc,text) VALUES (?,?,?,?,?,?)""",
         (CHANNEL_ID, int(message_id), symbol, int(sent_dt.timestamp()), int(time.time()), text[:4000]))
     return "stored" if cur.rowcount else "duplicate"
+
+
+
+def format_excellent_log(symbol: str, alert_utc: int) -> str:
+    """Only a capture acknowledgement. Never imply Dhan executed an order."""
+    if not re.fullmatch(r"[A-Z][A-Z0-9&._-]{0,29}", symbol):
+        raise ValueError("Invalid Excellent stock symbol")
+    when = datetime.fromtimestamp(int(alert_utc), IST).strftime("%d-%b-%Y %H:%M:%S IST")
+    return "\\n".join((
+        "🏆🔥 <b>RESULTBOT — EXCELLENT RESULTS</b>",
+        f"📈 Stock: <b>#{escape(symbol)}</b>",
+        "📩 Source: Earnings Pulse",
+        f"🕒 Alert received: {when}",
+        "✅ Status: Excellent alert captured",
+        "🔎 Price study: Tracking verified post-alert candles",
+        "",
+        "🏦 <b>Dhan order: NOT SUBMITTED</b>",
+        "💰 Dhan execution price: N/A",
+        "🟡 Research-only mode — no broker order was attempted",
+    ))
+
+
+def enqueue_live_log(con: sqlite3.Connection, message_id: int) -> bool:
+    """Queue ONLY an already-stored live Excellent message; never history/backfill."""
+    row = con.execute(
+        "SELECT symbol,sent_utc FROM alerts WHERE channel_id=? AND message_id=?",
+        (CHANNEL_ID, int(message_id)),
+    ).fetchone()
+    if row is None:
+        return False
+    text = format_excellent_log(str(row[0]), int(row[1]))
+    cur = con.execute(
+        """INSERT OR IGNORE INTO log_outbox
+        (channel_id,message_id,kind,text_html,created_utc)
+        VALUES (?,?,'EXCELLENT_ALERT',?,?)""",
+        (CHANNEL_ID,int(message_id),text,int(time.time())),
+    )
+    return bool(cur.rowcount)
+
+
+def configured_log_group_id() -> int | None:
+    """Use explicit ResultBot group, otherwise the existing bot log group."""
+    from dotenv import dotenv_values
+    values = dotenv_values(Path.home() / "uditbot" / ".env")
+    raw = (os.environ.get("RESULTBOT_LOG_GROUP_ID") or
+           values.get("RESULTBOT_LOG_GROUP_ID") or
+           os.environ.get("LOG_GROUP_ID") or values.get("LOG_GROUP_ID") or "")
+    raw = str(raw).strip()
+    if not raw:
+        return None
+    if not re.fullmatch(r"-[0-9]{5,20}",raw):
+        raise ValueError("Log group must be a signed negative Telegram group ID")
+    return int(raw)
+
+
+async def resolve_log_group(client):
+    """Send only to an authenticated account's uniquely matching joined group."""
+    wanted = configured_log_group_id()
+    if wanted is None:
+        LOG.warning("No LOG_GROUP_ID configured; Excellent Telegram cards disabled")
+        return None
+    matched=[]
+    async for dialog in client.iter_dialogs():
+        if int(dialog.id) == wanted and getattr(dialog,"is_group",False):
+            entity_id = int(getattr(dialog.entity, "id", 0))
+            if entity_id == CHANNEL_ID:
+                raise RuntimeError("Refusing to post into the signal source channel")
+            matched.append(dialog.entity)
+    if len(matched) != 1:
+        raise RuntimeError(
+            "Log Group not found as exactly one joined Telegram group. "
+            "No messages will be sent to an unverified destination."
+        )
+    LOG.info("Verified ResultBot Log Group destination (ID not printed)")
+    return matched[0]
+
+
+async def send_queued_logs(con: sqlite3.Connection, client, group) -> int:
+    """Crash-recoverable at-least-once delivery; no historical import notifications."""
+    if group is None:
+        return 0
+    now=int(time.time())
+    # A previous process may have crashed after claim. Retrying could deliver a
+    # duplicate in an ambiguous network failure; never claim exactly once.
+    con.execute(
+        "UPDATE log_outbox SET state='PENDING' WHERE state='SENDING' AND last_try_utc<?",
+        (now-600,),
+    )
+    rows=con.execute(
+        """SELECT id,text_html,created_utc FROM log_outbox
+           WHERE state='PENDING' AND attempts<5 AND last_try_utc<=?
+           ORDER BY id LIMIT 10""",
+        (now-30,),
+    ).fetchall()
+    delivered=0
+    for rowid, body, created in rows:
+        if created < now-24*3600:
+            con.execute("UPDATE log_outbox SET state='EXPIRED' WHERE id=?",(rowid,))
+            continue
+        claimed=con.execute(
+            """UPDATE log_outbox SET state='SENDING',attempts=attempts+1,last_try_utc=?
+               WHERE id=? AND state='PENDING'""",
+            (now,rowid),
+        )
+        if not claimed.rowcount:
+            continue
+        try:
+            await client.send_message(group,body,parse_mode="html",link_preview=False)
+        except Exception as exc:
+            con.execute("UPDATE log_outbox SET state='PENDING' WHERE id=?",(rowid,))
+            LOG.warning("Excellent Log Group delivery failed: %s",type(exc).__name__)
+        else:
+            con.execute(
+                "UPDATE log_outbox SET state='SENT',sent_utc=? WHERE id=?",
+                (int(time.time()),rowid),
+            )
+            delivered+=1
+    return delivered
 
 
 def request_bars(symbol: str, timeout: int = 12) -> list[dict]:
@@ -416,6 +549,11 @@ async def backfill(con: sqlite3.Connection, limit: int):
 async def listen(con: sqlite3.Connection, *, interval: int = 75):
     from telethon import events
     client, entity = await telegram_client()
+    try:
+        log_group = await resolve_log_group(client)
+    except Exception as exc:
+        LOG.warning("Log Group notifications disabled: %s",exc)
+        log_group = None
     # Backfill a small gap on startup to recover missed messages, deduped by Telegram ID.
     async def handler(event):
         m = event.message
@@ -423,6 +561,8 @@ async def listen(con: sqlite3.Connection, *, interval: int = 75):
         if verdict == "stored":
             symbol, _ = parse_alert(m.raw_text or "")
             print(f"[EXCELLENT STORED] #{symbol}  telegram_id={m.id}  {m.date.isoformat()}",flush=True)
+            if log_group is not None:
+                enqueue_live_log(con,m.id)
         elif verdict == "missing_or_multiple_stock_symbols":
             LOG.warning("Excellent message %s needs manual stock-symbol review", m.id)
 
@@ -436,6 +576,14 @@ async def listen(con: sqlite3.Connection, *, interval: int = 75):
             LOG.warning("Backfill retry %d: %s", attempt+1,e)
             await asyncio.sleep(3)
     print("[LISTEN] @earnings_pulse | ONLY Excellent Results | no order execution",flush=True)
+    async def log_poller():
+        while True:
+            try:
+                await send_queued_logs(con,client,log_group)
+            except Exception as exc:
+                LOG.warning("Excellent Log Group polling error: %s",type(exc).__name__)
+            await asyncio.sleep(10)
+    log_task = asyncio.create_task(log_poller())
     async def price_poller():
         while True:
             now = datetime.now(IST)
@@ -452,6 +600,7 @@ async def listen(con: sqlite3.Connection, *, interval: int = 75):
         await client.run_until_disconnected()
     finally:
         poll.cancel()
+        log_task.cancel()
         if guard: guard.cancel()
         await client.disconnect()
 
