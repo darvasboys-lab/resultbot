@@ -5,7 +5,7 @@ import json
 import sqlite3
 import tempfile
 import unittest
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from unittest.mock import patch
 
@@ -138,6 +138,14 @@ class ExcellentOnlyTests(unittest.TestCase):
             self.assertIn("NOT SUBMITTED",fake.sent[0][1])
             self.assertEqual(con.execute("SELECT state FROM log_outbox").fetchone()[0],"SENT")
             con.close()
+
+    def test_test_history_fallback_recent_only(self):
+        moment=datetime(2026,11,6,16,20,0,tzinfo=timezone.utc)
+        self.assertTrue(ew.recent_test_candidate(moment-timedelta(minutes=5),moment))
+        self.assertTrue(ew.recent_test_candidate(moment-timedelta(minutes=14),moment))
+        self.assertFalse(ew.recent_test_candidate(moment-timedelta(minutes=16),moment))
+        self.assertFalse(ew.recent_test_candidate(moment+timedelta(minutes=3),moment))
+        self.assertFalse(ew.recent_test_candidate(moment.replace(tzinfo=None),moment))
 
     def test_test_group_excellent_only_with_marker(self):
         self.assertEqual(
