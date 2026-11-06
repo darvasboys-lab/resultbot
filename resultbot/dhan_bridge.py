@@ -68,6 +68,8 @@ def status_line(order: dict) -> tuple[str, int, int, str]:
         raise dh.DhanReadError("Dhan returned invalid broker quantities")
     if int(qty) != qty or int(filled) != filled:
         raise dh.DhanReadError("Dhan returned non-integral broker quantities")
+    if status == "TRADED" and filled != qty:
+        raise dh.DhanReadError("Dhan full-trade status conflicts with filled quantity")
     price = dh.checked_number(order.get("averageTradedPrice"))
     avg = "N/A"
     if filled > 0 and price is not None and price > 0:
