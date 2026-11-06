@@ -264,22 +264,71 @@ def env_config() -> tuple[int,str]:
     return int(api_id), api_hash
 
 
+def existing_telegram_login():
+    """Read the already-authorized portable Telegram session, without echoing secrets."""
+    from dotenv import dotenv_values
+    env = dotenv_values(Path.home() / "uditbot" / ".env")
+    value = os.environ.get("TG_SESSION_STRING") or env.get("TG_SESSION_STRING")
+    return str(value).strip() if value else ""
+
+
+def require_trading_inactive():
+    """Fail closed before sharing an existing Telegram authorization."""
+    import subprocess
+    try:
+        result = subprocess.run(
+            ["systemctl", "is-active", "trading_bot.service"],
+            capture_output=True, text=True, timeout=5, check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired) as e:
+        raise RuntimeError("Cannot verify trading bot state; refusing session reuse") from e
+    status = result.stdout.strip()
+    if status not in ("inactive", "failed"):
+        raise RuntimeError(
+            "Cannot reuse Telegram login while trading_bot.service is active or its state is uncertain: "
+            + repr(status)
+        )
+
+
 async def telegram_client():
     try:
         from telethon import TelegramClient
+        from telethon.sessions import StringSession
     except ImportError as e:
         raise RuntimeError("Telethon missing from venv") from e
     api_id, api_hash = env_config()
     ROOT.mkdir(mode=0o700, parents=True, exist_ok=True)
-    # Uses its own session file; prompts once if ResultBot Excellent has not logged in.
-    client = TelegramClient(str(SESSION), api_id, api_hash)
-    await client.start()
+    reused = existing_telegram_login()
+    if reused:
+        # Reuse login only while the original bot is not running. Never prompt OTP.
+        require_trading_inactive()
+        client = TelegramClient(StringSession(reused), api_id, api_hash)
+        await client.connect()
+        if not await client.is_user_authorized():
+            await client.disconnect()
+            raise RuntimeError("Saved TG_SESSION_STRING is not authorized; no OTP attempted")
+        print("[TELEGRAM] Using existing ResultBot login; no new OTP required",flush=True)
+    else:
+        # Fresh session remains available when no portable authorization exists.
+        client = TelegramClient(str(SESSION), api_id, api_hash)
+        await client.start()
     entity = await client.get_entity(CHANNEL)
     if int(entity.id) != CHANNEL_ID:
         await client.disconnect()
         raise RuntimeError(f"Unexpected Earnings Pulse source identity: {entity.id} != {CHANNEL_ID}")
     return client, entity
 
+
+async def shared_login_watchdog(client):
+    """Disconnect a shared authorization if trading starts after this research listener."""
+    while True:
+        await asyncio.sleep(5)
+        try:
+            require_trading_inactive()
+        except RuntimeError:
+            LOG.error("Trading service started or could not be verified: disconnecting research session")
+            await client.disconnect()
+            return
 
 async def backfill(con: sqlite3.Connection, limit: int):
     client, entity = await telegram_client()
@@ -326,10 +375,13 @@ async def listen(con: sqlite3.Connection, *, interval: int = 75):
                     LOG.info("Verified Yahoo NSE candles: %d/%d symbols",worked,candidates)
             await asyncio.sleep(interval)
     poll = asyncio.create_task(price_poller())
+    from telethon.sessions import StringSession
+    guard = asyncio.create_task(shared_login_watchdog(client)) if isinstance(client.session, StringSession) else None
     try:
         await client.run_until_disconnected()
     finally:
         poll.cancel()
+        if guard: guard.cancel()
         await client.disconnect()
 
 
