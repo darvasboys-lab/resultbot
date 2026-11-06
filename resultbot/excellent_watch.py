@@ -55,10 +55,16 @@ def parse_alert(text: str) -> tuple[str | None, str]:
 
 
 def parse_test_alert(text: str) -> tuple[str | None, str]:
-    """Deliberate test-group signal; ordinary posts cannot trigger test cards."""
-    if not isinstance(text, str) or not text.startswith(TEST_MARKER + " "):
-        return None, "not_marked_test"
-    return parse_alert(text[len(TEST_MARKER) + 1:])
+    """Parse Excellent-only messages from the verified TEST group.
+
+    The verified Telegram group identity is the security boundary, not a
+    manually added text prefix. Old [RBTEST] messages also remain accepted.
+    """
+    if not isinstance(text, str):
+        return None, "not_excellent"
+    if text.startswith(TEST_MARKER + " "):
+        text = text[len(TEST_MARKER) + 1:]
+    return parse_alert(text)
 
 
 def setup_db(path: Path = DB) -> sqlite3.Connection:
@@ -206,7 +212,7 @@ def enqueue_test_log(con: sqlite3.Connection, group_id: int, message_id: int,
     return "test_queued" if cur.rowcount else "duplicate"
 
 
-def recent_test_candidate(sent_dt: datetime, now_utc: datetime, lookback_seconds: int = 900) -> bool:
+def recent_test_candidate(sent_dt: datetime, now_utc: datetime, lookback_seconds: int = 1800) -> bool:
     """Limit startup history scanning to recently posted test-group messages."""
     if sent_dt.tzinfo is None or now_utc.tzinfo is None:
         return False
@@ -673,7 +679,7 @@ async def listen(con: sqlite3.Connection, *, interval: int = 75):
                     f"[TEST EXCELLENT] {source}: queued for Log Group (no broker actions)",
                     flush=True,
                 )
-            elif verdict not in ("not_marked_test", "not_excellent", "duplicate"):
+            elif verdict not in ("not_excellent", "duplicate"):
                 LOG.info("Test Group message ignored (%s): %s", source, verdict)
             return verdict
 
@@ -685,7 +691,7 @@ async def listen(con: sqlite3.Connection, *, interval: int = 75):
             # Telethon may not emit an incoming NewMessage update for posts sent by
             # the same logged-in Telegram account. Poll *only the verified test
             # group* as a fallback; never touch Earnings Pulse research history.
-            # The first scan can recover a marked message from the last 15 mins.
+            # The first scan can recover recent Excellent posts from the last 30 minutes.
             first = True
             while True:
                 total = 0
@@ -698,7 +704,8 @@ async def listen(con: sqlite3.Connection, *, interval: int = 75):
                         if not recent_test_candidate(m.date, moment):
                             continue
                         text = m.raw_text or ""
-                        if not text.startswith(TEST_MARKER + " "):
+                        symbol, reason = parse_test_alert(text)
+                        if symbol is None:
                             continue
                         marked += 1
                         if record_test_message(m, "HISTORY POLL") == "test_queued":
@@ -706,8 +713,8 @@ async def listen(con: sqlite3.Connection, *, interval: int = 75):
                     if first:
                         print(
                             f"[TEST SCAN] Test Group history readable: {total} recent entries checked, "
-                            f"{marked} marked tests seen, {accepted} newly queued. "
-                            "Send a fresh [RBTEST] message if none appear.",
+                            f"{marked} Excellent test posts matched, {accepted} newly queued. "
+                            "No [RBTEST] prefix is required.",
                             flush=True,
                         )
                         first = False
@@ -718,8 +725,8 @@ async def listen(con: sqlite3.Connection, *, interval: int = 75):
                 await asyncio.sleep(30)
 
         test_scan_task = asyncio.create_task(test_history_poller())
-        print("[TEST] Send to test group: [RBTEST] #ROLEXRINGS - 🏆🔥 Excellent Results",flush=True)
-        print("[TEST] Also send: [RBTEST] #ROLEXRINGS - 🌟 Great Results (must stay silent)",flush=True)
+        print("[TEST] Send to test group: #YESBANK - 🏆🔥 Excellent Results",flush=True)
+        print("[TEST] Also send: #YESBANK - 🌟 Great Results (must stay silent)",flush=True)
     for attempt in range(4):
         try:
             async for m in client.iter_messages(entity, limit=30):
