@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
-"""Real, opt-in, one-shot ResultBot Equity AMO.
+"""Real Dhan Equity AMO with persistent owner-controlled YES / NO.
 
-This module CAN submit real Dhan orders. Disabled by default. Never invoked by
-a synthetic prefix or historical Telegram backfill. Authorization is a short-
-lived owner action via the local control panel. Does NOT run trading_bot.service.
+While ON, every distinct, eligible, NEW Telegram alert may create its own real
+Equity AMO. No order-count/day limits, one-shot disarm, or 10-minute expiry.
+OFF blocks future submissions, but existing broker orders require a separate
+owner-directed cancellation. No HTTP/WebUI service is necessary.
+Does NOT start trading_bot.service.
 """
 from __future__ import annotations
 
