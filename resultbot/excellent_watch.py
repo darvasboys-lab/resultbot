@@ -32,6 +32,7 @@ DB = ROOT / "excellent_watch.sqlite3"
 SESSION = ROOT / "excellent_telegram"  # independent: no reuse of trading bot's session filename
 CHANNEL = "earnings_pulse"
 CHANNEL_ID = 2457353254
+TEST_MARKER = "[RBTEST]"  # required literal prefix for isolated Test Group messages
 EXCELLENT = re.compile(r"\bexcellent\s+results?\b", re.IGNORECASE)
 HASH = re.compile(r"(?<!\w)#([A-Za-z][A-Za-z0-9&._-]{0,29})\b")
 FIELDS = ("open", "high", "low", "close")
@@ -51,6 +52,13 @@ def parse_alert(text: str) -> tuple[str | None, str]:
     if symbol in ("NIFTY", "BANKNIFTY", "SENSEX"):
         return None, "index_not_equity"
     return symbol, "excellent"
+
+
+def parse_test_alert(text: str) -> tuple[str | None, str]:
+    """Deliberate test-group signal; ordinary posts cannot trigger test cards."""
+    if not isinstance(text, str) or not text.startswith(TEST_MARKER + " "):
+        return None, "not_marked_test"
+    return parse_alert(text[len(TEST_MARKER) + 1:])
 
 
 def setup_db(path: Path = DB) -> sqlite3.Connection:
@@ -159,6 +167,77 @@ def enqueue_live_log(con: sqlite3.Connection, message_id: int) -> bool:
         (CHANNEL_ID,int(message_id),text,int(time.time())),
     )
     return bool(cur.rowcount)
+
+
+def format_test_log(symbol: str, alert_utc: int) -> str:
+    """A synthetic test must never resemble a broker fill or real source alert."""
+    if not re.fullmatch(r"[A-Z][A-Z0-9&._-]{0,29}", symbol):
+        raise ValueError("Invalid test symbol")
+    when = datetime.fromtimestamp(int(alert_utc), IST).strftime("%d-%b-%Y %H:%M:%S IST")
+    return "\n".join((
+        "🧪 <b>RESULTBOT TEST — EXCELLENT ONLY</b>",
+        f"📈 Test symbol: <b>#{escape(symbol)}</b>",
+        "📩 Source: Authorized ResultBot TEST GROUP (not Earnings Pulse)",
+        f"🕒 Test message: {when}",
+        "✅ Test-group Excellent filter: PASSED",
+        "🏦 Dhan order: NOT SUBMITTED",
+        "💰 Execution price: N/A",
+        "🚫 NOT A REAL EARNINGS ALERT — no orders, no price research",
+    ))
+
+
+def enqueue_test_log(con: sqlite3.Connection, group_id: int, message_id: int,
+                     sent_dt: datetime, raw_text: str) -> str:
+    """Test-only outbox row, without touching alerts or minute bars."""
+    symbol, verdict = parse_test_alert(raw_text)
+    if symbol is None:
+        return verdict
+    if sent_dt.tzinfo is None:
+        raise ValueError("Test message timestamp must be timezone-aware")
+    if group_id >= 0 or group_id in (-CHANNEL_ID, -int(f"100{CHANNEL_ID}")):
+        return "invalid_test_source"
+    text = format_test_log(symbol, int(sent_dt.timestamp()))
+    cur = con.execute(
+        """INSERT OR IGNORE INTO log_outbox
+        (channel_id,message_id,kind,text_html,created_utc)
+        VALUES (?,?,'TEST_EXCELLENT_ALERT',?,?)""",
+        (int(group_id),int(message_id),text,int(time.time())),
+    )
+    return "test_queued" if cur.rowcount else "duplicate"
+
+
+def configured_test_group_id() -> int | None:
+    """Read the existing authorized Test Group ID; never print or alter secrets."""
+    from dotenv import dotenv_values
+    values = dotenv_values(Path.home() / "uditbot" / ".env")
+    raw = (os.environ.get("RESULTBOT_TEST_GROUP_ID") or
+           values.get("RESULTBOT_TEST_GROUP_ID") or
+           os.environ.get("TEST_GROUP_ID") or values.get("TEST_GROUP_ID") or "")
+    raw = str(raw).strip()
+    if not raw or raw == "0":
+        return None
+    if not re.fullmatch(r"-[0-9]{5,20}",raw):
+        raise ValueError("Test Group ID must be a negative signed Telegram group peer ID")
+    return int(raw)
+
+
+async def resolve_test_group(client):
+    """Resolve only one existing joined Telegram group, not source or Log Group."""
+    wanted = configured_test_group_id()
+    if wanted is None:
+        LOG.info("TEST_GROUP_ID not configured; test input is off")
+        return None, None
+    log_id = configured_log_group_id()
+    if wanted == log_id or abs(wanted) in (CHANNEL_ID,int(f"100{CHANNEL_ID}")):
+        raise RuntimeError("TEST_GROUP_ID cannot be the Log Group or Earnings Pulse source")
+    matches=[]
+    async for dialog in client.iter_dialogs():
+        if int(dialog.id) == wanted and getattr(dialog,"is_group",False):
+            matches.append(dialog.entity)
+    if len(matches) != 1:
+        raise RuntimeError("Test group is not a uniquely joined group; test input disabled")
+    LOG.info("Verified ResultBot TEST GROUP (ID not printed)")
+    return matches[0], wanted
 
 
 def configured_log_group_id() -> int | None:
@@ -554,6 +633,14 @@ async def listen(con: sqlite3.Connection, *, interval: int = 75):
     except Exception as exc:
         LOG.warning("Log Group notifications disabled: %s",exc)
         log_group = None
+    # Test group is a completely separate synthetic input; never add it to
+    # Earnings Pulse backfill, the alerts database, or the Yahoo research feed.
+    test_entity, test_id = None, None
+    if log_group is not None:
+        try:
+            test_entity, test_id = await resolve_test_group(client)
+        except Exception as exc:
+            LOG.warning("ResultBot test input disabled: %s", exc)
     # Backfill a small gap on startup to recover missed messages, deduped by Telegram ID.
     async def handler(event):
         m = event.message
@@ -567,6 +654,19 @@ async def listen(con: sqlite3.Connection, *, interval: int = 75):
             LOG.warning("Excellent message %s needs manual stock-symbol review", m.id)
 
     client.add_event_handler(handler, events.NewMessage(chats=entity))
+    if test_entity is not None:
+        async def test_handler(event):
+            message = event.message
+            verdict = enqueue_test_log(
+                con, test_id, message.id, message.date, message.raw_text or ""
+            )
+            if verdict == "test_queued":
+                print("[TEST EXCELLENT] Test group message queued for Log Group (no broker actions)",flush=True)
+            elif verdict not in ("not_marked_test","not_excellent","duplicate"):
+                LOG.info("TEST group ignored test message: %s",verdict)
+        client.add_event_handler(test_handler, events.NewMessage(chats=test_entity))
+        print("[TEST] Send to test group: [RBTEST] #ROLEXRINGS - 🏆🔥 Excellent Results",flush=True)
+        print("[TEST] Also send: [RBTEST] #ROLEXRINGS - 🌟 Great Results (must stay silent)",flush=True)
     for attempt in range(4):
         try:
             async for m in client.iter_messages(entity, limit=30):
@@ -680,6 +780,11 @@ def main():
             "SELECT state, COUNT(*) FROM log_outbox GROUP BY state ORDER BY state"
         ):
             print("  ",state,":",count)
+        try:
+            test_configured = configured_test_group_id() is not None
+        except ValueError:
+            test_configured = False
+        print("TEST GROUP configured:", "YES" if test_configured else "NO")
         print("Only new Excellent alerts generate cards; history and all other ratings stay silent.")
         print("Dhan order status is research-only; no broker orders are submitted or verified here.")
     con.close()
