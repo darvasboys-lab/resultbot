@@ -98,6 +98,31 @@ on a distinct verified broker card and in the AMO status database.
 Old/replayed, unauthorized, duplicate, or non-Excellent messages
 cannot submit AMOs.
 
+## When Dhan `GET /fundlimit` returns HTTP 500
+
+A broker HTTP 500 means that **fresh live funds have not been verified**.
+This is not proof of invalid account credentials or an accepted AMO.
+The default installer retries only the idempotent `GET /fundlimit` up to
+three times on HTTP 500/502/503/504. It never retries order placement,
+never uses a remembered balance, and remains OFF if the broker stays unavailable.
+
+When the broker funds endpoint is down, the owner can still install the
+corrected Telegram listener **with AMO kept OFF** using the explicit
+`--code-only` argument to `install_real_amo.sh`. This skips only the
+installer's read-only broker preflight; it does **not** bypass the
+fresh funds and IP checks required by the owner YES switch and by every
+order submission. It will restart only the ResultBot Telegram listener.
+
+Verify broker recovery with:
+
+```bash
+~/uditbot/venv/bin/python ~/resultbot-data/equity_amo_live.py preflight
+```
+
+If it still fails, do not turn AMO ON and do not send more real trading
+signals. Keep AMO OFF and let Dhan's funds API recover or contact Dhan
+support if failures persist.
+
 ## Safety, brokerage verification and transparency
 
 - Each real request uses `NSE_EQ / CNC / BUY / LIMIT / DAY`,
