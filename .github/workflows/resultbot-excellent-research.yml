@@ -6,6 +6,8 @@ on:
       - "resultbot/excellent_watch.py"
       - "resultbot/dhan_readonly.py"
       - "resultbot/dhan_bridge.py"
+      - "resultbot/equity_amo_preview.py"
+      - "tests/test_resultbot_equity_amo_preview.py"
       - "tests/test_resultbot_dhan_bridge.py"
       - "resultbot/install_dhan_autorenew.sh"
       - "tests/test_resultbot_dhan_readonly.py"
@@ -18,6 +20,8 @@ on:
       - "resultbot/excellent_watch.py"
       - "resultbot/dhan_readonly.py"
       - "resultbot/dhan_bridge.py"
+      - "resultbot/equity_amo_preview.py"
+      - "tests/test_resultbot_equity_amo_preview.py"
       - "tests/test_resultbot_dhan_bridge.py"
       - "resultbot/install_dhan_autorenew.sh"
       - "tests/test_resultbot_dhan_readonly.py"
@@ -40,9 +44,13 @@ jobs:
       - name: Install limited test dependencies
         run: python -m pip install "telethon==1.38.1" "python-dotenv>=1.0.1,<2.0.0"
       - name: Compile ResultBot research and Dhan GET-only connector
-        run: python -m py_compile resultbot/excellent_watch.py resultbot/dhan_readonly.py resultbot/dhan_bridge.py
+        run: python -m py_compile resultbot/excellent_watch.py resultbot/dhan_readonly.py resultbot/dhan_bridge.py resultbot/equity_amo_preview.py
       - name: Syntax-check isolated ResultBot token timer installer
         run: bash -n resultbot/install_dhan_autorenew.sh
+      - name: Verify Equity AMO dry-run self-test
+        run: python resultbot/equity_amo_preview.py --self-test
+      - name: Verify Equity AMO Test Group pipeline
+        run: python -m unittest -v tests.test_resultbot_equity_amo_preview
       - name: Verify Dhan GET-only self-test
         run: python resultbot/dhan_readonly.py self-test
       - name: Run Dhan GET-only offline tests
