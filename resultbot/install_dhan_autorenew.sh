@@ -56,7 +56,7 @@ After=network-online.target time-sync.target
 
 [Service]
 Type=oneshot
-ExecStart=$BOT_PY $SCRIPT refresh
+ExecStart=$BOT_PY $SCRIPT refresh-scheduled
 UMask=0077
 NoNewPrivileges=true
 PrivateTmp=true
@@ -72,7 +72,7 @@ Description=ResultBot daily DhanHQ read-only token renewal at 08:00 IST
 [Timer]
 OnCalendar=*-*-* 08:00:00 Asia/Kolkata
 Persistent=true
-AccuracySec=1min
+AccuracySec=1s
 RandomizedDelaySec=0
 Unit=$SERVICE
 
