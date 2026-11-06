@@ -187,12 +187,16 @@ class RealEquityAmoTests(unittest.TestCase):
         for state in ("RESERVED","PREPARING","SUBMITTING"):
             live._update(first,state)
             with self.assertRaisesRegex(live.LiveAmoError,
-                                        "preparing/submitting"):
+                                        "Source change is unavailable"):
                 live.update_settings(source="BOTH",budget=900)
-        self.assertEqual(live.editable_settings(),before)
+            # Budget edits must stay simple even with a pending order, because
+            # every previous intent has already snapshotted its own budget.
+            self.assertEqual(live.update_settings(budget=5000)["per_order_budget_inr"],5000)
+        self.assertEqual(live.editable_settings()["source"],before["source"])
+        self.assertEqual(live._intent(first)["budget"],500)
         live._update(first,"ACKED",order_id=OID,security_id="1333",
                      broker_status="PENDING")
-        self.assertEqual(live.update_settings(budget=700)["per_order_budget_inr"],700)
+        self.assertEqual(live.update_settings(source="BOTH",budget=7000)["per_order_budget_inr"],7000)
 
     def test_bare_cli_arm_uses_saved_operator_budget_and_source(self):
         from contextlib import redirect_stdout
