@@ -62,7 +62,8 @@ def connect_db(path: Path = STATE_DB) -> sqlite3.Connection:
       budget INTEGER NOT NULL DEFAULT 500,
       expires INTEGER NOT NULL DEFAULT 0,
       armed_since INTEGER NOT NULL DEFAULT 0,
-      arm_seq INTEGER NOT NULL DEFAULT 0
+      arm_seq INTEGER NOT NULL DEFAULT 0,
+      stop_seq INTEGER NOT NULL DEFAULT 0
     );
     INSERT OR IGNORE INTO control(id) VALUES (1);
     CREATE TABLE IF NOT EXISTS intents(
@@ -73,6 +74,8 @@ def connect_db(path: Path = STATE_DB) -> sqlite3.Connection:
       alert_ts INTEGER NOT NULL,
       created_ts INTEGER NOT NULL,
       account TEXT NOT NULL,
+      arm_stop_seq INTEGER NOT NULL DEFAULT 0,
+      budget INTEGER NOT NULL DEFAULT 500,
       correlation TEXT NOT NULL UNIQUE,
       security_id TEXT NOT NULL DEFAULT '',
       qty INTEGER NOT NULL DEFAULT 0,
@@ -91,9 +94,9 @@ def connect_db(path: Path = STATE_DB) -> sqlite3.Connection:
 
 def _control(con) -> dict:
     row=con.execute(
-        "SELECT armed,source,budget,expires,armed_since,arm_seq FROM control WHERE id=1"
+        "SELECT armed,source,budget,expires,armed_since,arm_seq,stop_seq FROM control WHERE id=1"
     ).fetchone()
-    return dict(zip(("armed","source","budget","expires","armed_since","arm_seq"),row))
+    return dict(zip(("armed","source","budget","expires","armed_since","arm_seq","stop_seq"),row))
 
 
 def status() -> dict:
@@ -154,7 +157,8 @@ def arm(*, source: str = "TEST", budget: int = BUDGET_DEFAULT) -> dict:
 
 def disarm() -> dict:
     with connect_db() as con:
-        con.execute("UPDATE control SET armed=0,expires=0 WHERE id=1")
+        # An explicit owner OFF invalidates already-reserved pre-submit intents.
+        con.execute("UPDATE control SET armed=0,expires=0,stop_seq=stop_seq+1 WHERE id=1")
     return status()
 
 
@@ -185,9 +189,9 @@ def reserve(source: str, msg_id: int, symbol: str, sent_utc: int) -> int | None:
             correlation=correlation[:30]
             cur=con.execute(
                 """INSERT OR IGNORE INTO intents
-                 (source,msg_id,symbol,alert_ts,created_ts,account,correlation)
-                 VALUES(?,?,?,?,?,?,?)""",
-                 (source,int(msg_id),symbol,int(sent_utc),now,account,correlation)
+                 (source,msg_id,symbol,alert_ts,created_ts,account,arm_stop_seq,budget,correlation)
+                 VALUES(?,?,?,?,?,?,?,?,?)""",
+                 (source,int(msg_id),symbol,int(sent_utc),now,account,c["stop_seq"],c["budget"],correlation)
             )
             con.execute("COMMIT")
             return int(cur.lastrowid) if cur.rowcount else None
@@ -391,8 +395,7 @@ def execute(intent_id:int) -> None:
             raise LiveAmoError("Dhan account changed since intent reservation")
         balance=_verified_broker_context(account,token)
         security_id,tick=_verified_instrument(item["symbol"])
-        with connect_db() as con:
-            budget=_control(con)["budget"]
+        budget=int(item["budget"])
         qty,price,quote_ts=_quote_and_size(item["symbol"],budget,tick)
         if balance < qty*price+100:
             raise LiveAmoError("Insufficient verified Dhan funds including ₹100 buffer")
@@ -400,8 +403,25 @@ def execute(intent_id:int) -> None:
             raise LiveAmoError("Safety conditions changed before submission")
         if time.time()-item["alert_ts"]>MAX_SIGNAL_AGE:
             raise LiveAmoError("Telegram alert stale before final submission")
-        _update(intent_id,"SUBMITTING",note="Broker POST may have been sent; never auto-retry",
-                security_id=security_id,qty=qty,price=price)
+        # Serialize OFF with the final pre-submit transition. If OFF has
+        # happened, the broker POST is never attempted.
+        with connect_db() as con:
+            con.execute("BEGIN IMMEDIATE")
+            try:
+                control=_control(con)
+                if control["stop_seq"] != item["arm_stop_seq"]:
+                    raise LiveAmoError("Owner switched OFF before broker submission")
+                changed=con.execute(
+                    """UPDATE intents SET state='SUBMITTING',note=?,security_id=?,qty=?,price=?
+                       WHERE id=? AND state='PREPARING'""",
+                    ("Broker POST may have been sent; never auto-retry",
+                     security_id,qty,price,intent_id))
+                if changed.rowcount != 1:
+                    raise LiveAmoError("Intent was modified; refusing broker submission")
+                con.execute("COMMIT")
+            except BaseException:
+                con.execute("ROLLBACK")
+                raise
         item=_intent(intent_id)
         payload={
           "dhanClientId":account,"correlationId":item["correlation"],
