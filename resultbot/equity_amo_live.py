@@ -8,6 +8,7 @@ lived owner action via the local control panel. Does NOT run trading_bot.service
 from __future__ import annotations
 
 import asyncio
+from contextlib import contextmanager
 import json
 import math
 import os
@@ -93,6 +94,16 @@ def connect_db(path: Path | None = None) -> sqlite3.Connection:
     return con
 
 
+@contextmanager
+def managed_db(path: Path | None = None):
+    """Commit-safe, explicitly closed SQLite handle (no leaked broker state handles)."""
+    con=connect_db(path)
+    try:
+        yield con
+    finally:
+        con.close()
+
+
 def _control(con) -> dict:
     row=con.execute(
         "SELECT armed,source,budget,expires,armed_since,arm_seq,stop_seq FROM control WHERE id=1"
@@ -101,7 +112,7 @@ def _control(con) -> dict:
 
 
 def status() -> dict:
-    with connect_db() as con:
+    with managed_db() as con:
         ctrl=_control(con)
         rows=con.execute("""SELECT id,symbol,state,order_id,broker_status,qty,price,
              created_ts,note,cancel_after FROM intents ORDER BY id DESC LIMIT 12""").fetchall()
@@ -135,7 +146,7 @@ def arm(*, source: str = "TEST", budget: int = BUDGET_DEFAULT) -> dict:
     account, token=dh.load_credentials()
     # Read-only live permission checks before ON; fail closed on unlisted IP.
     _verified_broker_context(account,token)
-    with connect_db() as con:
+    with managed_db() as con:
         con.execute("BEGIN IMMEDIATE")
         try:
             unsettled=con.execute("""SELECT COUNT(*) FROM intents WHERE
@@ -160,7 +171,7 @@ def arm(*, source: str = "TEST", budget: int = BUDGET_DEFAULT) -> dict:
 
 
 def disarm() -> dict:
-    with connect_db() as con:
+    with managed_db() as con:
         # An explicit owner OFF invalidates already-reserved pre-submit intents.
         con.execute("UPDATE control SET armed=0,expires=0,stop_seq=stop_seq+1 WHERE id=1")
     return status()
@@ -178,7 +189,7 @@ def reserve(source: str, msg_id: int, symbol: str, sent_utc: int) -> int | None:
     if not trading_service_stopped():
         disarm()
         return None
-    with connect_db() as con:
+    with managed_db() as con:
         con.execute("BEGIN IMMEDIATE")
         try:
             c=_control(con)
@@ -214,12 +225,12 @@ def _update(intent_id:int,state:str,*,note:str="",order_id:str|None=None,
         if val is not None:
             fields.append(field+"=?");values.append(val)
     values.append(intent_id)
-    with connect_db() as con:
+    with managed_db() as con:
         con.execute("UPDATE intents SET "+",".join(fields)+" WHERE id=?",values)
 
 
 def _intent(intent_id:int) -> dict:
-    with connect_db() as con:
+    with managed_db() as con:
         con.row_factory=sqlite3.Row
         r=con.execute("SELECT * FROM intents WHERE id=?",(intent_id,)).fetchone()
         if not r:
@@ -397,7 +408,7 @@ def execute(intent_id:int) -> None:
             raise LiveAmoError("Telegram alert stale before final submission")
         # Serialize OFF with the final pre-submit transition. If OFF has
         # happened, the broker POST is never attempted.
-        with connect_db() as con:
+        with managed_db() as con:
             con.execute("BEGIN IMMEDIATE")
             try:
                 control=_control(con)
@@ -491,7 +502,7 @@ def request_cancel(intent_id:int,automatic:bool=False) -> str:
     if status not in ("TRANSIT","PENDING","PART_TRADED"):
         raise LiveAmoError("Unrecognized broker state; cancellation blocked")
     # Lock and claim ONE cancellation attempt only after broker preflight succeeds.
-    with connect_db() as con:
+    with managed_db() as con:
         claim=con.execute(
             "UPDATE intents SET cancel_attempted=1 WHERE id=? AND cancel_attempted=0",
             (intent_id,)
@@ -571,7 +582,7 @@ def reconcile_unknown(intent_id:int) -> bool:
 
 def monitor() -> int:
     """Broker verify active orders; auto-attempt cancellation after 120 s."""
-    with connect_db() as con:
+    with managed_db() as con:
         intents=[(r[0],r[1]) for r in con.execute(
             "SELECT id,state FROM intents WHERE state IN ('UNKNOWN','ACKED','CANCEL_REQUESTED') ORDER BY id LIMIT 10"
         )]
@@ -618,7 +629,7 @@ def offline_self_test():
     assert _session_closed is not None
     assert BUDGET_MAX==1000 and ARM_SECONDS==600
     assert TEST_PREFIX=="[RBLIVEAMO] "
-    with connect_db(Path("/tmp")/("amo_test_"+str(os.getpid())+".sqlite3")) as con:
+    with managed_db(Path("/tmp")/("amo_test_"+str(os.getpid())+".sqlite3")) as con:
         assert _control(con)["armed"]==0
     for suffix in ("","-wal","-shm"):
         try:(Path("/tmp")/("amo_test_"+str(os.getpid())+".sqlite3"+suffix)).unlink()
