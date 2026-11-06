@@ -39,8 +39,8 @@ IST = ZoneInfo("Asia/Kolkata")
 TEST_PREFIX = "[RBLIVEAMO] "
 BUDGET_DEFAULT = 500
 BUDGET_MAX = 1000
-ARM_SECONDS = 600
-CANCEL_SECONDS = 120
+# This is a persistent owner ON/OFF toggle, NOT a one-shot or expiring arm.
+# Broker limits are per-order financial safeguards, never number-of-orders caps.
 MAX_SIGNAL_AGE = 90
 EGRESS_CHECK_URL = "https://api.ipify.org"
 TERMINAL = frozenset({"TRADED", "REJECTED", "CANCELLED", "EXPIRED"})
@@ -122,11 +122,15 @@ def status() -> dict:
     with managed_db() as con:
         ctrl=_control(con)
         rows=con.execute("""SELECT id,symbol,state,order_id,broker_status,qty,price,
-             created_ts,note,cancel_after FROM intents ORDER BY id DESC LIMIT 12""").fetchall()
+             created_ts,note,cancel_after FROM intents ORDER BY id DESC""").fetchall()
         ctrl["orders"]=[dict(zip(
             ("id","symbol","state","order_id","broker_status","qty","price",
              "created_ts","note","cancel_after"),r)) for r in rows]
-        ctrl["effective_on"]=bool(ctrl["armed"] and ctrl["expires"] > time.time())
+        ctrl["effective_on"]=bool(ctrl["armed"])
+        ctrl["active_orders"]=con.execute(
+            "SELECT COUNT(*) FROM intents WHERE state IN "
+            "('RESERVED','PREPARING','SUBMITTING','UNKNOWN','ACKED','CANCEL_REQUESTED')"
+        ).fetchone()[0]
         return ctrl
 
 
@@ -160,20 +164,12 @@ def arm(*, source: str = "TEST", budget: int = BUDGET_DEFAULT) -> dict:
     with managed_db() as con:
         con.execute("BEGIN IMMEDIATE")
         try:
-            unsettled=con.execute("""SELECT COUNT(*) FROM intents WHERE
-                  state IN ('RESERVED','PREPARING','SUBMITTING','UNKNOWN','ACKED','CANCEL_REQUESTED')
-            """).fetchone()[0]
-            if unsettled:
-                raise LiveAmoError("Earlier AMO unresolved; reconcile or cancel before arming")
-            day=datetime.now(IST).strftime("%Y-%m-%d")
-            count=con.execute(
-                "SELECT COUNT(*) FROM intents WHERE date(created_ts,'unixepoch','+5 hours','+30 minutes')=?",
-                (day,)
-            ).fetchone()[0]
-            if count:
-                raise LiveAmoError("Maximum one AMO attempt per IST day; no second entry")
-            con.execute("""UPDATE control SET armed=1,source=?,budget=?,expires=?,armed_since=?,arm_seq=arm_seq+1
-                            WHERE id=1""",(source,budget,int(time.time())+ARM_SECONDS,int(time.time())))
+            # No count-based restriction, no time expiry and no automatic OFF.
+            # Every distinct NEW signal can become its own broker order while ON.
+            # Preserve the stop generation so prior owner OFF cannot be bypassed.
+            con.execute("""UPDATE control SET armed=1,source=?,budget=?,expires=0,
+                            armed_since=?,arm_seq=arm_seq+1 WHERE id=1""",
+                        (source,budget,int(time.time())))
             con.execute("COMMIT")
         except BaseException:
             con.execute("ROLLBACK")
@@ -189,7 +185,7 @@ def disarm() -> dict:
 
 
 def reserve(source: str, msg_id: int, symbol: str, sent_utc: int) -> int | None:
-    """Atomic opt-in gate; rejects stale, unwanted, duplicate or already-used signals."""
+    """Persistent ON gate: each distinct fresh Telegram message gets one durable intent."""
     if source not in ("TEST","EARNINGS_PULSE") or not re.fullmatch(
         r"[A-Z][A-Z0-9&._-]{0,29}",symbol or ""
     ):
@@ -204,12 +200,12 @@ def reserve(source: str, msg_id: int, symbol: str, sent_utc: int) -> int | None:
         con.execute("BEGIN IMMEDIATE")
         try:
             c=_control(con)
-            if not(c["armed"] and c["source"]==source and c["expires"]>=now
+            if not(c["armed"] and c["source"]==source
                     and int(sent_utc)>=c["armed_since"]):
                 con.execute("COMMIT")
                 return None
-            # Disarm BEFORE any network call, and persist unique intent.
-            con.execute("UPDATE control SET armed=0,expires=0 WHERE id=1")
+            # NO auto-disarm. UNIQUE(source,msg_id) ensures at-most-one intent
+            # per Telegram message across restarts. OFF is owner-controlled.
             account,_=dh.load_credentials()
             correlation="RBA"+str(c["arm_seq"])+"-"+str(msg_id)
             correlation=correlation[:30]
@@ -423,8 +419,23 @@ def execute(intent_id:int) -> None:
             con.execute("BEGIN IMMEDIATE")
             try:
                 control=_control(con)
-                if control["stop_seq"] != item["arm_stop_seq"]:
-                    raise LiveAmoError("Owner switched OFF before broker submission")
+                if (not control["armed"] or
+                    control["stop_seq"] != item["arm_stop_seq"] or
+                    control["source"] != item["source"]):
+                    raise LiveAmoError("AMO is OFF or owner changed the active source")
+                # In-flight orders need funds reserved even if simultaneous
+                # Dhan fund reads still show the original available balance.
+                # This is a financial exposure check, NOT a count-based limit.
+                pending_notional=con.execute(
+                    """SELECT COALESCE(SUM(qty*price),0) FROM intents
+                       WHERE id<>? AND state IN
+                       ('SUBMITTING','UNKNOWN','ACKED','CANCEL_REQUESTED')""",
+                    (intent_id,)
+                ).fetchone()[0]
+                if balance < float(pending_notional)+qty*price+100:
+                    raise LiveAmoError(
+                        "Insufficient broker funds after outstanding AMO commitments"
+                    )
                 changed=con.execute(
                     """UPDATE intents SET state='SUBMITTING',note=?,security_id=?,qty=?,price=?
                        WHERE id=? AND state='PREPARING'""",
@@ -459,7 +470,7 @@ def execute(intent_id:int) -> None:
                    _broker_card(_intent(intent_id),"Dhan response has no verifiable order ID"))
             return
         _update(intent_id,"ACKED",note="Dhan order ID received; verifying broker order book",
-                order_id=oid,broker_status=state,cancel_after=int(time.time())+CANCEL_SECONDS)
+                order_id=oid,broker_status=state,cancel_after=0)
         item=_intent(intent_id)
         try:
             detail=_verify_owned_order(item,token)
@@ -475,10 +486,10 @@ def execute(intent_id:int) -> None:
             _queue(_intent(intent_id),"REAL_AMO_UNKNOWN",_broker_card(_intent(intent_id),
                 "Order ID verified; Dhan status requires review"))
             return
-        _update(intent_id,"ACKED",note="Verified REAL AMO received by Dhan; cancellation scheduled",
+        _update(intent_id,"ACKED",note="Verified REAL AMO received by Dhan; owner may cancel separately",
                 broker_status=final_status)
         _queue(_intent(intent_id),"REAL_AMO_ACK",_broker_card(_intent(intent_id),
-              "Verified LIVE AMO accepted at Dhan; auto-cancel attempt scheduled in 120s"))
+              "Verified LIVE AMO accepted at Dhan; cancellation is owner-controlled"))
     except (dh.DhanReadError,LiveAmoError,ValueError,ImportError,OSError) as exc:
         state=_intent(intent_id)["state"]
         if state=="SUBMITTING":
@@ -584,7 +595,7 @@ def reconcile_unknown(intent_id:int) -> bool:
     status=str(order.get("orderStatus") or "UNKNOWN").upper()
     _update(intent_id,"ACKED" if status in ("PENDING","TRANSIT") else "UNKNOWN",
             order_id=oid,broker_status=status,
-            cancel_after=int(time.time())+CANCEL_SECONDS,
+            cancel_after=0,
             note="Broker correlation verified after uncertain order response")
     _queue(_intent(intent_id),"REAL_AMO_RECONCILED",
            _broker_card(_intent(intent_id),"Actual Dhan order ID recovered by correlation"))
@@ -592,10 +603,10 @@ def reconcile_unknown(intent_id:int) -> bool:
 
 
 def monitor() -> int:
-    """Broker verify active orders; auto-attempt cancellation after 120 s."""
+    """Monitor ALL resultbot-owned live orders; cancellation is owner-controlled."""
     with managed_db() as con:
         intents=[(r[0],r[1]) for r in con.execute(
-            "SELECT id,state FROM intents WHERE state IN ('UNKNOWN','ACKED','CANCEL_REQUESTED') ORDER BY id LIMIT 10"
+            "SELECT id,state FROM intents WHERE state IN ('UNKNOWN','ACKED','CANCEL_REQUESTED') ORDER BY id"
         )]
     changed=0
     for intent_id, initial_state in intents:
@@ -624,12 +635,8 @@ def monitor() -> int:
                 _queue(newest,"REAL_AMO_"+re.sub("[^A-Z0-9]","_",status),
                        _broker_card(newest,"Broker-confirmed update; filled="+str(filled)))
                 changed+=1
-            if status in ("TRANSIT","PENDING","PART_TRADED"):
-                if item["cancel_after"] and int(time.time())>=item["cancel_after"] and not item["cancel_attempted"]:
-                    outcome=request_cancel(intent_id,automatic=True)
-                    newest=_intent(intent_id)
-                    _queue(newest,"REAL_AMO_CANCEL_REQUEST",
-                           _broker_card(newest,"Automatic cancel requested: "+outcome))
+            # Never cancel merely because an elapsed timer fired. The owner
+            # chooses which broker-confirmed orders to cancel and when.
         except (LiveAmoError,dh.DhanReadError,ValueError,OSError):
             # State remains unresolved and should be reviewed in Dhan.
             continue
@@ -655,19 +662,19 @@ def preflight() -> dict:
 
 def offline_self_test():
     assert _session_closed is not None
-    assert BUDGET_MAX==1000 and ARM_SECONDS==600
+    assert BUDGET_MAX==1000 and MAX_SIGNAL_AGE==90
     assert TEST_PREFIX=="[RBLIVEAMO] "
     with managed_db(Path("/tmp")/("amo_test_"+str(os.getpid())+".sqlite3")) as con:
         assert _control(con)["armed"]==0
     for suffix in ("","-wal","-shm"):
         try:(Path("/tmp")/("amo_test_"+str(os.getpid())+".sqlite3"+suffix)).unlink()
         except FileNotFoundError: pass
-    print("PASS: real-AMO disabled by default; durable SQLite controls; one-shot limits")
+    print("PASS: default OFF; durable persistent YES/NO; no order-count or time-expiry caps")
 
 
 def main():
     import argparse
-    p=argparse.ArgumentParser(description="ResultBot LIVE Equity AMO control; intentionally OFF by default")
+    p=argparse.ArgumentParser(description="ResultBot LIVE Equity AMO persistent YES/NO; OFF by default")
     sub=p.add_subparsers(dest="cmd",required=True)
     sub.add_parser("status")
     sub.add_parser("preflight")
