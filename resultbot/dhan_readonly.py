@@ -389,7 +389,13 @@ def do_configure_autorenew() -> None:
     """Reuse existing .env if available; otherwise opt in to securely storing keys."""
     account, token = load_credentials()
     verified_profile(account, token)
-    existing = renewal_source(account)
+    try:
+        existing = renewal_source(account)
+    except DhanReadError as exc:
+        if "existing bot .env Dhan account differs" not in str(exc):
+            raise
+        print("Existing bot .env belongs to a different Dhan account; will NOT reuse it.")
+        existing = None
     if existing:
         print("READY: auto-renewal credentials already available in", existing[0])
         print("No PIN or TOTP setup key re-entry needed.")
