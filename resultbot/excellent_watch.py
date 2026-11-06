@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """ResultBot Excellent Results: read-only Telegram collection + verifiable 1m Yahoo research.
 
-This module contains NO Dhan imports, order entry or trading-engine imports.
-It can send Excellent-only RESEARCH alert notices to the verified Log Group.
+This listener contains no order-entry or trading-engine imports.
+An optional independent Dhan GET-only bridge monitors only explicitly linked
+orders and queues broker-verification updates through the same Log Group outbox.
 It never runs the trading_bot.service and never trades.
 """
 from __future__ import annotations
@@ -744,6 +745,28 @@ async def listen(con: sqlite3.Connection, *, interval: int = 75):
                 LOG.warning("Excellent Log Group polling error: %s",type(exc).__name__)
             await asyncio.sleep(10)
     log_task = asyncio.create_task(log_poller())
+    # Optional Dhan GET-only broker bridge shares THIS Telegram session/outbox;
+    # no separate listener, no order placement, no symbol-only trade attribution.
+    broker_task = None
+    try:
+        import dhan_bridge
+        dhan_bridge.ensure_schema(con)
+        async def dhan_broker_poller():
+            while True:
+                try:
+                    changed = await dhan_bridge.poll_async(con)
+                    if changed:
+                        LOG.info("Dhan account-verified linked order updates queued: %d",changed)
+                except asyncio.CancelledError:
+                    raise
+                except Exception as exc:
+                    # Never log credential-bearing HTTP URLs or raw response bodies.
+                    LOG.warning("Dhan linked-order monitor unavailable: %s",type(exc).__name__)
+                await asyncio.sleep(45)
+        broker_task = asyncio.create_task(dhan_broker_poller())
+        LOG.info("ResultBot Dhan GET-only linked-order monitor enabled")
+    except ImportError:
+        LOG.info("Optional Dhan GET-only bridge not installed; Excellent collector unchanged")
     async def price_poller():
         while True:
             now = datetime.now(IST)
@@ -761,6 +784,7 @@ async def listen(con: sqlite3.Connection, *, interval: int = 75):
     finally:
         poll.cancel()
         log_task.cancel()
+        if broker_task: broker_task.cancel()
         if test_scan_task: test_scan_task.cancel()
         if guard: guard.cancel()
         await client.disconnect()
@@ -847,7 +871,7 @@ def main():
             test_configured = False
         print("TEST GROUP configured:", "YES" if test_configured else "NO")
         print("Only new Excellent alerts generate cards; history and all other ratings stay silent.")
-        print("Dhan order status is research-only; no broker orders are submitted or verified here.")
+        print("Dhan orders are never placed here; only explicitly linked orders receive broker-verified updates.")
     con.close()
 
 
