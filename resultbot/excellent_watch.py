@@ -648,6 +648,7 @@ def main():
     sub=ap.add_subparsers(dest="cmd", required=True)
     sub.add_parser("self-test")
     sub.add_parser("listen",help="read-only Telegram listener + weekday market-hour Yahoo research")
+    sub.add_parser("log-status",help="local Excellent Log Group queue status; no messages sent")
     p=sub.add_parser("backfill",help="read-only Telegram history scan, Excellent only")
     p.add_argument("--limit",type=int,default=2000)
     sub.add_parser("prices",help="one-time Yahoo minute-bar retrieval for recently seen Excellent alerts")
@@ -668,6 +669,19 @@ def main():
         print(f"Yahoo 1m requests: completed={done}; candidates={all_}")
     elif args.cmd=="report":
         report(con,args.limit)
+    elif args.cmd=="log-status":
+        try:
+            configured = configured_log_group_id() is not None
+        except ValueError as exc:
+            print("Log Group configuration invalid:", exc)
+            configured = False
+        print("ResultBot Excellent notifications | destination configured:", "YES" if configured else "NO")
+        for state, count in con.execute(
+            "SELECT state, COUNT(*) FROM log_outbox GROUP BY state ORDER BY state"
+        ):
+            print("  ",state,":",count)
+        print("Only new Excellent alerts generate cards; history and all other ratings stay silent.")
+        print("Dhan order status is research-only; no broker orders are submitted or verified here.")
     con.close()
 
 
