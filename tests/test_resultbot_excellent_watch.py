@@ -105,7 +105,7 @@ class ExcellentOnlyTests(unittest.TestCase):
         self.assertIn("NOT SUBMITTED", card)
         self.assertIn("execution price: N/A", card)
         self.assertNotIn("Order Executed", card)
-        self.assertIn("\\n",card)
+        self.assertIn("\n",card)
 
     def test_live_notice_dedup_and_no_non_excellent(self):
         with tempfile.TemporaryDirectory() as d:
