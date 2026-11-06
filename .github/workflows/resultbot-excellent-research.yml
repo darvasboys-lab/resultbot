@@ -4,6 +4,8 @@ on:
   pull_request:
     paths:
       - "resultbot/excellent_watch.py"
+      - "resultbot/dhan_readonly.py"
+      - "tests/test_resultbot_dhan_readonly.py"
       - "tests/test_resultbot_excellent_watch.py"
       - ".github/workflows/resultbot-excellent-research.yml"
   push:
@@ -11,6 +13,8 @@ on:
       - "feature/excellent-only-collector-20261106"
     paths:
       - "resultbot/excellent_watch.py"
+      - "resultbot/dhan_readonly.py"
+      - "tests/test_resultbot_dhan_readonly.py"
       - "tests/test_resultbot_excellent_watch.py"
       - ".github/workflows/resultbot-excellent-research.yml"
   workflow_dispatch:
@@ -29,8 +33,12 @@ jobs:
           python-version: "3.13"
       - name: Install limited test dependencies
         run: python -m pip install "telethon==1.38.1" "python-dotenv>=1.0.1,<2.0.0"
-      - name: Compile Excellent-only collector
-        run: python -m py_compile resultbot/excellent_watch.py
+      - name: Compile ResultBot research and Dhan GET-only connector
+        run: python -m py_compile resultbot/excellent_watch.py resultbot/dhan_readonly.py
+      - name: Verify Dhan GET-only self-test
+        run: python resultbot/dhan_readonly.py self-test
+      - name: Run Dhan GET-only offline tests
+        run: python -m unittest -v tests.test_resultbot_dhan_readonly
       - name: Verify internal self-test
         run: python resultbot/excellent_watch.py self-test
       - name: Run Excellent-only offline unit tests
