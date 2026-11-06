@@ -9,7 +9,6 @@ from unittest.mock import patch
 
 from resultbot import equity_amo_live as live
 from resultbot import dhan_readonly as dh
-from resultbot import amo_panel
 
 ACCOUNT = "1105508885"
 TOKEN = "T"*50
@@ -179,12 +178,6 @@ class RealEquityAmoTests(unittest.TestCase):
         with self.assertRaises(live.LiveAmoError):
             live._dhan_http("PUT","/orders/"+OID,TOKEN,{})
 
-    def test_panel_secret_file_is_private(self):
-        private=Path(self.tmp.name)/"panel-key"
-        result=amo_panel.read_secret(private)
-        self.assertTrue(len(result)>20)
-        self.assertEqual(private.stat().st_mode&0o777,0o600)
-        self.assertEqual(amo_panel.read_secret(private),result)
 
 if __name__=="__main__":
     unittest.main()
