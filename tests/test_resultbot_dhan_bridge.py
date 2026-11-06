@@ -63,6 +63,13 @@ class DhanBridgeTests(unittest.TestCase):
         self.assertEqual(self.con.execute(
             "SELECT count(*) FROM log_outbox WHERE kind='DHAN_CONNECTED_V1'").fetchone()[0],1)
 
+    def test_read_only_preflight_does_not_queue_notifications(self):
+        profile={"dhanClientId":ACCOUNT,"tokenValidity":"07/11/2026 22:40"}
+        with patch.object(br,"snapshot",return_value=(ACCOUNT,profile,[],[])):
+            result=br.connect(self.con,notify=False)
+        self.assertEqual(result["account"],"***8885")
+        self.assertEqual(self.con.execute("SELECT count(*) FROM log_outbox").fetchone()[0],0)
+
     def test_unknown_or_mismatched_broker_identity_rejected(self):
         for bad in ({"account":"9999999999"},{"symbol":"ANOTHER"},
                     {"side":"SELL"},{"segment":"NSE_FNO"}):
