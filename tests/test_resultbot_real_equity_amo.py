@@ -78,6 +78,47 @@ class RealEquityAmoTests(unittest.TestCase):
                 live.arm(source="TEST",budget=500)
         self.assertFalse(live.status()["effective_on"])
 
+    def test_transient_dhan_funds_500_retried_only_as_get(self):
+        current={"dhanClientId":ACCOUNT,"availabelBalance":2500.5}
+        with (
+            patch.object(dh,"get_json",side_effect=[
+                dh.DhanReadError("Dhan HTTP error: 500"),current
+            ]) as get_request,
+            patch.object(live.time,"sleep") as pause,
+            patch.object(live,"_dhan_http") as broker_post,
+        ):
+            self.assertEqual(live._fresh_dhan_funds(ACCOUNT,TOKEN),2500.5)
+            self.assertEqual(get_request.call_count,2)
+            self.assertEqual([c.args[0] for c in get_request.call_args_list],
+                             ["/fundlimit","/fundlimit"])
+            pause.assert_called_once()
+            broker_post.assert_not_called()
+
+    def test_persistent_dhan_funds_500_fail_closed_after_three_gets(self):
+        with (
+            patch.object(dh,"get_json",side_effect=dh.DhanReadError(
+                "Dhan HTTP error: 500")) as get_request,
+            patch.object(live.time,"sleep") as pause,
+            patch.object(live,"_dhan_http") as broker_post,
+        ):
+            with self.assertRaisesRegex(live.LiveAmoError,"live balance unverified"):
+                live._fresh_dhan_funds(ACCOUNT,TOKEN)
+            self.assertEqual(get_request.call_count,3)
+            self.assertEqual(pause.call_count,2)
+            broker_post.assert_not_called()
+
+    def test_dhan_auth_401_is_not_retried_or_bypassed(self):
+        with (
+            patch.object(dh,"get_json",side_effect=dh.DhanReadError(
+                "Authentication rejected or token expired (HTTP 401)"
+            )) as get_request,
+            patch.object(live.time,"sleep") as pause,
+        ):
+            with self.assertRaises(dh.DhanReadError):
+                live._fresh_dhan_funds(ACCOUNT,TOKEN)
+            self.assertEqual(get_request.call_count,1)
+            pause.assert_not_called()
+
     def test_no_old_alert_and_no_wrong_source(self):
         self.armed()
         self.assertIsNone(live.reserve("EARNINGS_PULSE",9,"YESBANK",int(time.time())))
