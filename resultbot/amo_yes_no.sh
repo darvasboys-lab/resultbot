@@ -21,10 +21,11 @@ echo "YES: Keep AMO ON for ALL new eligible Excellent Results alerts."
 echo "     New official Earnings Pulse alerts and owner-authored normal"
 echo "     Test Group Excellent messages can submit REAL Dhan BUY CNC LIMIT AMOs."
 echo "     There is NO single-order limit, daily order-count cap or expiry."
-echo "     The existing INR 500 budget remains a PER-ORDER safety setting."
+echo "     Saved source/budget settings apply to all future eligible alerts."
 echo "NO:  Keep AMO OFF until you manually turn it ON again."
 echo "     NO does NOT cancel already submitted Dhan AMOs."
 echo "     Use the separate cancel command for selected broker orders."
+echo "EDIT: bash $D/amo_settings.sh"
 echo
 
 decision="NO"
@@ -32,7 +33,7 @@ if [[ -t 0 ]] && command -v whiptail >/dev/null 2>&1; then
     if whiptail --title "ResultBot: REAL Equity AMO" \
         --defaultno --yes-button "YES - AMO ON" \
         --no-button "NO - AMO OFF" \
-        --yesno "YES: Keep real Dhan Equity AMO ON until you press NO. Each new eligible Telegram alert can submit a real broker order (INR 500 per-order budget). No order-count limit or automatic expiry.\n\nNO: Stop NEW submissions. Existing broker orders must be cancelled separately by you." \
+        --yesno "YES: Keep real Dhan Equity AMO ON until you press NO, using your SAVED alert source and per-order budget settings. No order-count limit or automatic expiry.\n\nNO: Stop NEW submissions. Existing broker orders must be cancelled separately by you." \
         16 82; then
         decision="YES"
     fi
@@ -48,10 +49,10 @@ fi
 if [[ "$decision" == "YES" ]]; then
     echo "===== REAL DHAN ACCOUNT / FUNDS / STATIC-IP PREFLIGHT ====="
     "$PY" "$BOT" preflight
-    "$PY" "$BOT" arm --source BOTH --budget 500 > /dev/null
+    "$PY" "$BOT" arm > /dev/null
     echo
     echo "YES / ON: Real Equity AMO stays ON until you choose NO."
-    echo "All NEW eligible Earnings Pulse Excellent alerts may create real orders."
+    echo "Only the saved, authorized source(s) can create new real orders."
     echo "To trigger an owner-only TEST GROUP real order, post this NEW message:"
     echo "#YESBANK - 🏆🔥 Excellent Results"
     echo "(The optional [RBLIVEAMO] prefix is also accepted.)"
@@ -64,6 +65,7 @@ else
 fi
 echo
 "$PY" "$BOT" status-short
+echo "Edit saved settings: bash $D/amo_settings.sh"
 echo "Full order list: $PY $BOT status"
 echo "Request cancellation for an existing resultbot-owned order:"
 echo "  $PY $BOT cancel --intent-id <intent_number>"
