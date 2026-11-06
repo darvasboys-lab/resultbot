@@ -80,6 +80,40 @@ class DhanReadOnlyTests(unittest.TestCase):
         self.assertEqual(recorded[0].get_header("Access-token"),"z"*32)
 
 
+    def test_totp_secret_to_current_six_digits(self):
+        self.assertEqual(dh.current_totp_from_secret(
+            "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ",timestamp=59),"287082")
+        self.assertEqual(dh.normalize_totp_input("654321"),"654321")
+        with patch.object(dh.time,"time",return_value=59):
+            self.assertEqual(dh.normalize_totp_input(
+                "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ"),"287082")
+            self.assertEqual(len(dh.normalize_totp_input("JBSWY3DPEHPK3PXP")),6)
+        for invalid in ("1234567890123456","INVALID-NOT-BASE32","abc","",None):
+            with self.assertRaises(dh.DhanReadError):
+                dh.normalize_totp_input(invalid)
+
+    def test_totp_secret_does_not_get_sent_to_dhan(self):
+        key="GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ"
+        with patch.object(dh.time,"time",return_value=59):
+            code=dh.normalize_totp_input(key)
+        class FakeResponse:
+            status=200
+            def __enter__(self): return self
+            def __exit__(self,*args): return None
+            def read(self,n):
+                return json.dumps({"dhanClientId":"1105508885","accessToken":"T"*50}).encode()
+        class FakeOpener:
+            req=None
+            def open(self,req,timeout=12):
+                self.req=req
+                return FakeResponse()
+        opener=FakeOpener()
+        with patch.object(dh,"build_opener",return_value=opener):
+            dh.token_from_pin_totp("1105508885","123456",code)
+        self.assertIn("totp=287082",opener.req.full_url)
+        self.assertNotIn(key,opener.req.full_url)
+        self.assertNotIn(key,repr(opener.req.headers))
+
     def test_totp_auth_query_post_no_secret_in_logs_or_saved_file(self):
         class FakeResponse:
             status = 200
