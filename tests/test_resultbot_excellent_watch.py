@@ -175,7 +175,7 @@ class ExcellentOnlyTests(unittest.TestCase):
             self.assertEqual(kind,"TEST_EXCELLENT_ALERT")
             self.assertIn("NOT A REAL EARNINGS ALERT",card)
             self.assertIn("NOT SUBMITTED",card)
-            self.assertIn("execution price: N/A",card.lower())
+            self.assertIn("execution price: n/a",card.lower())
             con.close()
 
     def test_offline_self_test(self):
