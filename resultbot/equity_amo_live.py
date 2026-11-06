@@ -53,7 +53,11 @@ class LiveAmoError(Exception):
 def connect_db(path: Path | None = None) -> sqlite3.Connection:
     path = STATE_DB if path is None else path
     path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    path.parent.chmod(0o700)
+    if path.is_symlink():
+        raise LiveAmoError("Refusing symlinked real-AMO state database")
     con=sqlite3.connect(str(path),timeout=20,isolation_level=None)
+    path.chmod(0o600)
     con.execute("PRAGMA busy_timeout=20000")
     con.execute("PRAGMA journal_mode=WAL")
     con.executescript("""
@@ -141,6 +145,10 @@ def arm(*, source: str = "TEST", budget: int = BUDGET_DEFAULT) -> dict:
         raise LiveAmoError("Budget must be whole INR from 100 to 1000")
     if not trading_service_stopped():
         raise LiveAmoError("Original trading_bot.service must be inactive AND disabled")
+    if watch.configured_log_group_id() is None:
+        raise LiveAmoError("Telegram Log Group is not configured; real AMO cannot be armed")
+    if source=="TEST" and watch.configured_test_group_id() is None:
+        raise LiveAmoError("Authorized Telegram Test Group is not configured")
     if not _session_closed():
         raise LiveAmoError("Real Equity AMO can only be armed in a closed-market window")
     account, token=dh.load_credentials()
