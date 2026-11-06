@@ -299,6 +299,32 @@ def _egress_ip() -> str:
     return ip
 
 
+def _fresh_dhan_funds(account: str, token: str) -> float:
+    """Strictly read-only funds retry for temporary Dhan HTTP 5xx.
+
+    Never use a remembered balance, and never retry a broker order POST.
+    """
+    for attempt in range(3):
+        try:
+            data=dh.get_json("/fundlimit",token)
+            validated=dh.verify_fund_limits(account,data)
+            return float(validated["availabelBalance"])
+        except dh.DhanReadError as exc:
+            msg=str(exc)
+            transient=any(f"Dhan HTTP error: {code}" in msg
+                          for code in (500,502,503,504))
+            if not transient:
+                raise
+            if attempt==2:
+                raise LiveAmoError(
+                    "Dhan GET /fundlimit returned HTTP 5xx after 3 "
+                    "GET-only attempts; live balance unverified. "
+                    "AMO remains OFF; do not submit a real order."
+                ) from None
+            time.sleep((attempt+1)*1.0)
+    raise LiveAmoError("Dhan funds unavailable; AMO blocked")
+
+
 def _verified_broker_context(account:str,token:str):
     dh.verified_profile(account,token)
     ip=dh.get_json("/ip/getIP",token)
@@ -307,9 +333,9 @@ def _verified_broker_context(account:str,token:str):
     outbound=_egress_ip()
     if outbound not in (ip.get("primaryIP"),ip.get("secondaryIP")):
         raise LiveAmoError("ResultBot outbound IP is not on the Dhan order whitelist")
-    # Reuse the previously verified, GET-only ResultBot funds connector.
-    balances=dh.verify_fund_limits(account,dh.get_json("/fundlimit",token))
-    return balances["availabelBalance"]
+    # Live funds must always be freshly verified; a temporary upstream
+    # HTTP 500 is retried ONLY for the safe, idempotent GET endpoint.
+    return _fresh_dhan_funds(account,token)
 
 
 def _session_closed() -> bool:
@@ -709,7 +735,13 @@ def main():
     if a.cmd=="self-test": offline_self_test();return
     if a.cmd=="status": print(json.dumps(status(),indent=2));return
     if a.cmd=="status-short": print(status_short());return
-    if a.cmd=="preflight": print(json.dumps(preflight(),indent=2));return
+    if a.cmd=="preflight":
+        try:
+            print(json.dumps(preflight(),indent=2))
+        except (LiveAmoError,dh.DhanReadError) as exc:
+            print("PRE-FLIGHT BLOCKED: "+str(exc),file=sys.stderr)
+            raise SystemExit(1) from None
+        return
     if a.cmd=="off": print(json.dumps(disarm(),indent=2));return
     if a.cmd=="arm": print(json.dumps(arm(source=a.source,budget=a.budget),indent=2));return
     if a.cmd=="cancel": print("Cancel response:",request_cancel(a.intent_id));return
