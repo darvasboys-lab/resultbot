@@ -139,6 +139,45 @@ class ExcellentOnlyTests(unittest.TestCase):
             self.assertEqual(con.execute("SELECT state FROM log_outbox").fetchone()[0],"SENT")
             con.close()
 
+    def test_test_group_excellent_only_with_marker(self):
+        self.assertEqual(
+            ew.parse_test_alert("[RBTEST] #ROLEXRINGS - 🏆🔥 Excellent Results"),
+            ("ROLEXRINGS", "excellent"))
+        for invalid in (
+            "#ROLEXRINGS - Excellent Results",
+            "[RBTEST] #ROLEXRINGS - 🌟 Great Results",
+            "[RBTEST] #ROLEXRINGS Good Results",
+            "[RBTEST] #A #B Excellent Results",
+        ):
+            self.assertIsNone(ew.parse_test_alert(invalid)[0])
+
+    def test_test_alert_is_never_saved_as_live_research(self):
+        with tempfile.TemporaryDirectory() as d:
+            con = ew.setup_db(Path(d)/"test.db")
+            sent = datetime.now(timezone.utc)
+            group_id = -1234567890
+            msg = "[RBTEST] #ROLEXRINGS - 🏆🔥 Excellent Results"
+            self.assertEqual(ew.enqueue_test_log(con,group_id,41,sent,msg),"test_queued")
+            self.assertEqual(ew.enqueue_test_log(con,group_id,41,sent,msg),"duplicate")
+            self.assertEqual(
+                ew.enqueue_test_log(con,group_id,42,sent,"[RBTEST] #FOO - Great Results"),
+                "not_excellent")
+            self.assertEqual(
+                ew.enqueue_test_log(con,group_id,43,sent,"#ROLEXRINGS - Excellent Results"),
+                "not_marked_test")
+            self.assertEqual(
+                ew.enqueue_test_log(con, -int(f"100{ew.CHANNEL_ID}"),44,sent,msg),
+                "invalid_test_source")
+            self.assertEqual(con.execute("SELECT COUNT(*) FROM alerts").fetchone()[0],0)
+            self.assertEqual(con.execute("SELECT COUNT(*) FROM one_minute_bars").fetchone()[0],0)
+            self.assertEqual(con.execute("SELECT COUNT(*) FROM log_outbox").fetchone()[0],1)
+            kind, card = con.execute("SELECT kind,text_html FROM log_outbox").fetchone()
+            self.assertEqual(kind,"TEST_EXCELLENT_ALERT")
+            self.assertIn("NOT A REAL EARNINGS ALERT",card)
+            self.assertIn("NOT SUBMITTED",card)
+            self.assertIn("execution price: N/A",card.lower())
+            con.close()
+
     def test_offline_self_test(self):
         ew.self_test()
 
