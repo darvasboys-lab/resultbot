@@ -115,59 +115,48 @@ edit_source() {
 }
 
 edit_budget() {
-    local current desired min_budget max_budget outcome
+    local current desired outcome
     current="$(get_setting per_order_budget_inr)"
-    min_budget="$(get_setting budget_min_inr)"
-    max_budget="$(get_setting budget_max_inr)"
-    echo "Current per-order budget: INR $current"
-    echo "Allowed per-order range in the current bot: INR $min_budget–$max_budget"
+    echo "Saved budget: INR $current per new order"
+    echo "Enter YOUR chosen amount in whole rupees. No arbitrary budget cap."
     if [[ -t 0 ]] && command -v whiptail >/dev/null 2>&1; then
-        if ! desired="$(whiptail --title "Equity AMO budget per order" \
-            --inputbox "Enter a whole INR amount ($min_budget–$max_budget). This is PER ORDER; there is no daily order-count limit." \
+        if ! desired="$(whiptail --title "Equity AMO — your money, your budget" \
+            --inputbox "Enter your total INR budget for EACH new order. Quantity = whole shares affordable at Yahoo-based LIMIT price. Broker funds must cover actual order." \
             13 80 "$current" 3>&1 1>&2 2>&3)"; then
-            echo "Budget change cancelled. Saved INR $current remains unchanged."
+            echo "Budget unchanged."
             return 0
         fi
     else
-        read -r -p "New per-order budget (INR $min_budget–$max_budget): " desired
+        read -r -p "New budget per order (INR): " desired
     fi
-
-    # Normalize ordinary input whitespace; reject other formatting.
     desired="${desired#"${desired%%[![:space:]]*}"}"
     desired="${desired%"${desired##*[![:space:]]}"}"
     if [[ ! "$desired" =~ ^[0-9]+$ ]]; then
-        notice "INVALID AMOUNT. Enter a whole number like 600. Your saved budget remains INR $current. Allowed: INR $min_budget–$max_budget."
+        notice "Enter the amount as whole rupees, e.g. 5000, without currency symbols. Budget unchanged at INR $current."
         return 0
     fi
-
-    # Python avoids Bash 08 / leading-zero parsing and integer overflow.
     if ! "$PY" -c 'import sys
 try:
-    n=int(sys.argv[1]); lo=int(sys.argv[2]); hi=int(sys.argv[3])
-    sys.exit(0 if lo <= n <= hi else 1)
-except ValueError:
-    sys.exit(1)' "$desired" "$min_budget" "$max_budget"; then
-        notice "OUT OF RANGE: You entered INR $desired. Allowed per-order budget: INR $min_budget–$max_budget. Saved budget remains INR $current. Please choose a supported amount, or request an explicit risk-limit change."
+ n=int(sys.argv[1]); sys.exit(0 if 0<n<=2**63-1 else 1)
+except ValueError: sys.exit(1)' "$desired"; then
+        notice "Enter a positive whole-rupee amount. Budget unchanged at INR $current."
         return 0
     fi
-
-    if [[ "$desired" == "$current" ]]; then
-        echo "No change: budget already INR $current."
+    # An unchanged budget is not an error even with leading zeros.
+    if [[ "$("$PY" -c 'import sys; print(int(sys.argv[1]))' "$desired")" == "$current" ]]; then
+        echo "Already set: INR $current per order."
         return 0
     fi
-    if ! confirm "Save INR $desired as the PER-ORDER budget for FUTURE eligible real Dhan AMO signals? Existing orders and the YES/NO switch will not be changed."; then
-        echo "Budget unchanged at INR $current."
+    if ! confirm "Save INR $desired PER NEW ORDER? The bot will calculate whole-share quantity from a valid Yahoo-based limit price. This does not modify existing orders or change YES/NO."; then
+        echo "Budget unchanged."
         return 0
     fi
-
-    # The live engine may reject an edit if an in-flight order is between
-    # reservation and broker submission. Never terminate the entire menu.
     if ! outcome="$("$PY" "$BOT" settings --budget "$desired" 2>&1)"; then
-        notice "Budget unchanged: live settings check blocked this edit. $outcome. Check menu 4 for any unresolved Dhan order transition."
+        notice "Budget unchanged. $outcome"
         return 0
     fi
     echo "$outcome"
-    echo "Budget updated for FUTURE signals only; prior orders unaffected."
+    echo "Saved. Every FUTURE eligible signal uses the new INR $desired budget."
 }
 
 echo "======================================================"
