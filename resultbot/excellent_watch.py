@@ -335,16 +335,16 @@ async def telegram_client():
         raise RuntimeError("Telethon missing from venv") from e
     api_id, api_hash = env_config()
     ROOT.mkdir(mode=0o700, parents=True, exist_ok=True)
-    saved_login = existing_telegram_login()
-    sqlite_login = existing_sqlite_login()
     # Prefer an already configured portable session; fall back to the original
     # authenticated SQLite session, never requiring another Telegram login.
+    # Read the SQLite file only if the portable session did not authenticate.
     # Only one authorization is connected at a time.
     client = None
-    for source, token in (
-        ("TG_SESSION_STRING", saved_login),
-        ("~/uditbot/data/tg_userbot.session", sqlite_login),
+    for source, load_token in (
+        ("TG_SESSION_STRING", existing_telegram_login),
+        ("~/uditbot/data/tg_userbot.session", existing_sqlite_login),
     ):
+        token = load_token()
         if not token:
             continue
         require_trading_inactive()
