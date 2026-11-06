@@ -170,6 +170,78 @@ class DhanReadOnlyTests(unittest.TestCase):
         self.assertNotIn("654321",str(ctx.exception))
         self.assertNotIn("1105508885",str(ctx.exception))
 
+    def test_reuse_private_existing_bot_env_without_copy(self):
+        with tempfile.TemporaryDirectory() as td:
+            root=Path(td)
+            env=root/".env"
+            env.write_text(
+                "DHAN_CLIENT_ID=1105508885\n"
+                "DHAN_PIN=123456\n"
+                "DHAN_TOTP_SECRET=JBSWY3DPEHPK3PXP\n"
+            )
+            env.chmod(0o600)
+            self.assertEqual(
+                dh._read_existing_bot_env("1105508885",env),
+                ("123456","JBSWY3DPEHPK3PXP"),
+            )
+            with self.assertRaisesRegex(dh.DhanReadError,"account differs"):
+                dh._read_existing_bot_env("2222222222",env)
+            env.chmod(0o644)
+            with self.assertRaisesRegex(dh.DhanReadError,"permissions"):
+                dh._read_existing_bot_env("1105508885",env)
+
+    def test_autorenew_file_permissions_and_account_binding(self):
+        with tempfile.TemporaryDirectory() as td:
+            path=Path(td)/".dhan_autorenew.json"
+            dh.store_autorenew("1105508885","123456","JBSWY3DPEHPK3PXP",path)
+            self.assertEqual(stat.S_IMODE(path.stat().st_mode),0o600)
+            self.assertEqual(
+                dh._load_private_autorenew("1105508885",path),
+                ("123456","JBSWY3DPEHPK3PXP"),
+            )
+            with self.assertRaisesRegex(dh.DhanReadError,"account mismatch"):
+                dh._load_private_autorenew("2222222222",path)
+            path.chmod(0o644)
+            with self.assertRaisesRegex(dh.DhanReadError,"chmod 600"):
+                dh._load_private_autorenew("1105508885",path)
+
+    def test_refresh_fail_preserves_previous_token(self):
+        from contextlib import nullcontext
+        with patch.object(dh,"renewal_lock",return_value=nullcontext()), \
+             patch.object(dh,"load_credentials",return_value=("1105508885","A"*50)), \
+             patch.object(dh,"renewal_source",return_value=("existing bot .env","123456","JBSWY3DPEHPK3PXP")), \
+             patch.object(dh,"token_from_pin_totp",return_value="B"*50), \
+             patch.object(dh,"verified_profile",side_effect=dh.DhanReadError("bad broker identity")), \
+             patch.object(dh,"store_credentials") as writer:
+            with self.assertRaises(dh.DhanReadError):
+                dh.do_refresh_token()
+            writer.assert_not_called()
+
+    def test_refresh_success_uses_broker_verified_account_only(self):
+        from contextlib import nullcontext
+        with patch.object(dh,"renewal_lock",return_value=nullcontext()), \
+             patch.object(dh,"load_credentials",return_value=("1105508885","A"*50)), \
+             patch.object(dh,"renewal_source",return_value=("existing bot .env","123456","JBSWY3DPEHPK3PXP")), \
+             patch.object(dh,"token_from_pin_totp",return_value="B"*50) as generate, \
+             patch.object(dh,"verified_profile",return_value={"dhanClientId":"1105508885","tokenValidity":"sample"}) as verify, \
+             patch.object(dh,"store_credentials") as writer:
+            dh.do_refresh_token()
+            self.assertEqual(generate.call_count,1)
+            self.assertEqual(verify.call_count,1)
+            writer.assert_called_once_with("1105508885","B"*50)
+
+    def test_missing_autorenew_source_fails_closed(self):
+        from contextlib import nullcontext
+        with patch.object(dh,"renewal_lock",return_value=nullcontext()), \
+             patch.object(dh,"load_credentials",return_value=("1105508885","A"*50)), \
+             patch.object(dh,"renewal_source",return_value=None), \
+             patch.object(dh,"token_from_pin_totp") as login, \
+             patch.object(dh,"store_credentials") as writer:
+            with self.assertRaisesRegex(dh.DhanReadError,"not configured"):
+                dh.do_refresh_token()
+            login.assert_not_called()
+            writer.assert_not_called()
+
     def test_builtin_self_test(self):
         dh.self_test()
 
