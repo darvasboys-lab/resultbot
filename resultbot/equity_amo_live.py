@@ -483,8 +483,8 @@ def execute(intent_id:int) -> None:
 def request_cancel(intent_id:int,automatic:bool=False) -> str:
     """Cancel only recorded ResultBot-owned pending order; never assume success."""
     item=_intent(intent_id)
-    if item["state"] not in ("ACKED","CANCEL_REQUESTED"):
-        raise LiveAmoError("Cannot safely cancel: order ID unverified or intent not active")
+    if item["state"] not in ("ACKED","UNKNOWN","CANCEL_REQUESTED"):
+        raise LiveAmoError("Cannot safely cancel: no active resultbot-owned order")
     if not re.fullmatch(r"[0-9]{6,25}",item["order_id"]):
         raise LiveAmoError("Cannot cancel without verified Dhan order ID")
     account, token=dh.load_credentials()
