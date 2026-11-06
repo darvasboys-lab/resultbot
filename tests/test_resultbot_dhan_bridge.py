@@ -147,6 +147,8 @@ class DhanBridgeTests(unittest.TestCase):
         self.assertEqual(br.status_line(order(filled=0,average=999))[-1],"N/A")
         with self.assertRaises(dh.DhanReadError):
             br.status_line(order(filled=11,qty=10))
+        with self.assertRaisesRegex(dh.DhanReadError,"full-trade status"):
+            br.status_line(order(status="TRADED",filled=9,qty=10))
 
     def test_self_test(self):
         br.self_test()
