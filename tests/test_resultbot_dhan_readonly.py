@@ -19,6 +19,99 @@ class DhanReadOnlyTests(unittest.TestCase):
             with self.assertRaises(dh.DhanReadError):
                 dh.safe_endpoint(path)
 
+    def test_fundlimit_endpoint_get_only_and_not_in_url_token(self):
+        self.assertEqual(dh.safe_endpoint("/fundlimit"), dh.BASE+"/fundlimit")
+        for bad in ("/fundlimit?clientId=1","/fundlimit/other","/fundlimit/1"):
+            with self.assertRaises(dh.DhanReadError):
+                dh.safe_endpoint(bad)
+        class FakeReply:
+            status=200
+            def __enter__(self): return self
+            def __exit__(self,*args): return None
+            def read(self,count):
+                return json.dumps({
+                    "dhanClientId":"1105508885","availabelBalance":1543.25
+                }).encode()
+        recorded=[]
+        def fake_urlopen(req,timeout=12):
+            recorded.append(req)
+            return FakeReply()
+        with patch.object(dh,"urlopen",side_effect=fake_urlopen):
+            result=dh.get_json("/fundlimit","T"*50)
+        self.assertEqual(result["availabelBalance"],1543.25)
+        self.assertEqual(len(recorded),1)
+        self.assertEqual(recorded[0].get_method(),"GET")
+        self.assertEqual(recorded[0].full_url,dh.BASE+"/fundlimit")
+        self.assertEqual(recorded[0].get_header("Access-token"),"T"*50)
+
+    def test_verified_fund_limit_valid_and_zero_balance(self):
+        data={"dhanClientId":"1105508885","availabelBalance":0,
+              "utilizedAmount":1450.75,"withdrawableBalance":0,
+              "sodLimit":1450.75,"collateralAmount":0,
+              "receiveableAmount":0,"blockedPayoutAmount":0}
+        values=dh.verify_fund_limits("1105508885",data)
+        self.assertEqual(values["availabelBalance"],0.0)
+        self.assertEqual(values["utilizedAmount"],1450.75)
+        self.assertEqual(values["withdrawableBalance"],0.0)
+
+    def test_verified_funds_missing_optional_field_is_not_invented(self):
+        values=dh.verify_fund_limits("1105508885",
+            {"dhanClientId":"1105508885","availabelBalance":500.12})
+        self.assertEqual(values["availabelBalance"],500.12)
+        self.assertIsNone(values["withdrawableBalance"])
+        self.assertIsNone(values["collateralAmount"])
+
+    def test_verified_funds_account_mismatch_missing_and_invalid_rejected(self):
+        for broken in (
+            None,
+            [],
+            {"dhanClientId":"9999999999","availabelBalance":100},
+            {"dhanClientId":"1105508885"},
+            {"dhanClientId":"1105508885","availableBalance":100},
+            {"dhanClientId":"1105508885","availabelBalance":float("nan")},
+            {"dhanClientId":"1105508885","availabelBalance":float("inf")},
+            {"dhanClientId":"1105508885","availabelBalance":-1},
+            {"dhanClientId":"1105508885","availabelBalance":True},
+            {"dhanClientId":"1105508885","availabelBalance":100,"utilizedAmount":-1},
+        ):
+            with self.assertRaises(dh.DhanReadError):
+                dh.verify_fund_limits("1105508885",broken)
+
+    def test_do_funds_verifies_profile_then_funds_without_broker_mutation(self):
+        from contextlib import redirect_stdout
+        import io
+        funds={"dhanClientId":"1105508885","availabelBalance":1234.5,
+               "utilizedAmount":67.89,"withdrawableBalance":1100}
+        queries=[]
+        def fake_get(path,token):
+            queries.append(path)
+            if path=="/profile":
+                return {"dhanClientId":"1105508885","tokenValidity":"example"}
+            if path=="/fundlimit":
+                return funds
+            raise AssertionError("Unexpected Dhan endpoint")
+        buffer=io.StringIO()
+        with patch.object(dh,"get_json",side_effect=fake_get),redirect_stdout(buffer):
+            dh.do_funds("1105508885","T"*50)
+        output=buffer.getvalue()
+        self.assertEqual(queries,["/profile","/fundlimit"])
+        self.assertIn("***8885",output)
+        self.assertIn("INR 1,234.50",output)
+        self.assertIn("INR 67.89",output)
+        self.assertNotIn("1105508885",output)
+        self.assertNotIn("T"*50,output)
+        self.assertIn("NO order submitted",output)
+
+    def test_no_funds_call_if_broker_profile_account_mismatch(self):
+        queries=[]
+        def fake_get(path,token):
+            queries.append(path)
+            return {"dhanClientId":"9999999999"}
+        with patch.object(dh,"get_json",side_effect=fake_get):
+            with self.assertRaises(dh.DhanReadError):
+                dh.do_funds("1105508885","T"*50)
+        self.assertEqual(queries,["/profile"])
+
     def test_broker_fill_price_never_fabricated(self):
         self.assertEqual(dh.fill_info({"orderStatus":"PENDING","quantity":10,
                                       "filledQty":0,"averageTradedPrice":850})[-1],"N/A")
