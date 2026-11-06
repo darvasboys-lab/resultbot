@@ -147,6 +147,64 @@ def status_short() -> str:
             " | unresolved broker intents="+str(data["active_orders"]))
 
 
+def editable_settings() -> dict:
+    """Read saved operator preferences; never expose credentials or broker IDs."""
+    with managed_db() as con:
+        c=_control(con)
+    return {
+        "amo_enabled": bool(c["armed"]),
+        "source": c["source"],
+        "per_order_budget_inr": int(c["budget"]),
+        "budget_min_inr": 100,
+        "budget_max_inr": BUDGET_MAX,
+    }
+
+
+def update_settings(*, source: str | None = None,
+                    budget: int | None = None) -> dict:
+    """Edit persisted settings WITHOUT altering YES/NO or existing orders.
+
+    Settings only govern newly reserved Telegram intents. Reject edits while a
+    previously reserved intent is in the pre-broker-submission transition, so
+    a source change cannot silently invalidate that already accepted signal.
+    This never contacts Dhan, submits or cancels an order, or restarts services.
+    """
+    if source is None and budget is None:
+        raise LiveAmoError("Specify --source or --budget to edit settings")
+    if source is not None and source not in ("TEST", "EARNINGS_PULSE", "BOTH"):
+        raise LiveAmoError("Source must be TEST, EARNINGS_PULSE or BOTH")
+    if budget is not None and (type(budget) is not int or not 100 <= budget <= BUDGET_MAX):
+        raise LiveAmoError("Per-order budget must be whole INR from 100 to 1000")
+    with managed_db() as con:
+        con.execute("BEGIN IMMEDIATE")
+        try:
+            c=_control(con)
+            next_source = c["source"] if source is None else source
+            next_budget = c["budget"] if budget is None else budget
+            if next_source in ("TEST","BOTH") and watch.configured_test_group_id() is None:
+                raise LiveAmoError("Verified Test Group ID is not configured")
+            if watch.configured_log_group_id() is None:
+                raise LiveAmoError("Verified Log Group ID is not configured")
+            pending=con.execute(
+                """SELECT COUNT(*) FROM intents
+                   WHERE state IN ('RESERVED','PREPARING','SUBMITTING')"""
+            ).fetchone()[0]
+            if pending:
+                raise LiveAmoError(
+                    "An AMO is currently preparing/submitting; edit settings "
+                    "after its broker state has been reconciled"
+                )
+            con.execute(
+                "UPDATE control SET source=?,budget=? WHERE id=1",
+                (next_source,next_budget)
+            )
+            con.execute("COMMIT")
+        except BaseException:
+            con.execute("ROLLBACK")
+            raise
+    return editable_settings()
+
+
 def trading_service_stopped() -> bool:
     try:
         active=subprocess.run(["systemctl","is-active","trading_bot.service"],
@@ -723,6 +781,11 @@ def main():
     sub.add_parser("status")
     sub.add_parser("status-short")
     sub.add_parser("preflight")
+    edit=sub.add_parser("settings",help="edit saved AMO source/budget, leave YES/NO unchanged")
+    edit.add_argument("--source",choices=["TEST","EARNINGS_PULSE","BOTH"])
+    edit.add_argument("--budget",type=int)
+    edit.add_argument("--show",action="store_true",
+                      help="display current settings without changing anything")
     sub.add_parser("self-test")
     sub.add_parser("off")
     x=sub.add_parser("arm")
@@ -735,6 +798,19 @@ def main():
     if a.cmd=="self-test": offline_self_test();return
     if a.cmd=="status": print(json.dumps(status(),indent=2));return
     if a.cmd=="status-short": print(status_short());return
+    if a.cmd=="settings":
+        try:
+            if a.show:
+                if a.source is not None or a.budget is not None:
+                    raise LiveAmoError("--show cannot be combined with settings changes")
+                data=editable_settings()
+            else:
+                data=update_settings(source=a.source,budget=a.budget)
+            print(json.dumps(data,indent=2))
+        except LiveAmoError as exc:
+            print("SETTINGS BLOCKED: "+str(exc),file=sys.stderr)
+            raise SystemExit(2) from None
+        return
     if a.cmd=="preflight":
         try:
             print(json.dumps(preflight(),indent=2))
