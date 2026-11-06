@@ -135,6 +135,16 @@ def status() -> dict:
         return ctrl
 
 
+def status_short() -> str:
+    """Human-readable persistent owner switch, avoiding a large order-history dump."""
+    data=status()
+    mode="YES / ON" if data["effective_on"] else "NO / OFF"
+    return ("RESULTBOT EQUITY AMO: "+mode+
+            " | sources="+data["source"]+
+            " | per-order budget INR "+str(data["budget"])+
+            " | unresolved broker intents="+str(data["active_orders"]))
+
+
 def trading_service_stopped() -> bool:
     try:
         active=subprocess.run(["systemctl","is-active","trading_bot.service"],
@@ -683,6 +693,7 @@ def main():
     p=argparse.ArgumentParser(description="ResultBot LIVE Equity AMO persistent YES/NO; OFF by default")
     sub=p.add_subparsers(dest="cmd",required=True)
     sub.add_parser("status")
+    sub.add_parser("status-short")
     sub.add_parser("preflight")
     sub.add_parser("self-test")
     sub.add_parser("off")
@@ -695,6 +706,7 @@ def main():
     a=p.parse_args()
     if a.cmd=="self-test": offline_self_test();return
     if a.cmd=="status": print(json.dumps(status(),indent=2));return
+    if a.cmd=="status-short": print(status_short());return
     if a.cmd=="preflight": print(json.dumps(preflight(),indent=2));return
     if a.cmd=="off": print(json.dumps(disarm(),indent=2));return
     if a.cmd=="arm": print(json.dumps(arm(source=a.source,budget=a.budget),indent=2));return
