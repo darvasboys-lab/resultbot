@@ -1,0 +1,37 @@
+name: ResultBot Excellent-only research checks
+
+on:
+  pull_request:
+    paths:
+      - "resultbot/excellent_watch.py"
+      - "tests/test_resultbot_excellent_watch.py"
+      - ".github/workflows/resultbot-excellent-research.yml"
+  push:
+    branches:
+      - "feature/excellent-only-collector-20261106"
+    paths:
+      - "resultbot/excellent_watch.py"
+      - "tests/test_resultbot_excellent_watch.py"
+      - ".github/workflows/resultbot-excellent-research.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  offline-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Install limited test dependencies
+        run: python -m pip install "telethon==1.38.1" "python-dotenv>=1.0.1,<2.0.0"
+      - name: Compile Excellent-only collector
+        run: python -m py_compile resultbot/excellent_watch.py
+      - name: Verify internal self-test
+        run: python resultbot/excellent_watch.py self-test
+      - name: Run Excellent-only offline unit tests
+        run: python -m unittest -v tests.test_resultbot_excellent_watch
