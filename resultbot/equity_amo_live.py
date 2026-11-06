@@ -267,21 +267,9 @@ def _verified_broker_context(account:str,token:str):
     outbound=_egress_ip()
     if outbound not in (ip.get("primaryIP"),ip.get("secondaryIP")):
         raise LiveAmoError("ResultBot outbound IP is not on the Dhan order whitelist")
-    # Read-only funds API using Dhan headers; fail closed if unavailable.
-    req=Request("https://api.dhan.co/v2/fundlimit",headers={
-        "access-token":token,"Accept":"application/json","User-Agent":"ResultBot-Amo-Funds/1.0"
-    })
-    try:
-        with urlopen(req,timeout=8) as r:
-            funds=json.loads(r.read(200_000))
-    except (HTTPError,URLError,OSError,ValueError):
-        raise LiveAmoError("Dhan funds unavailable; entry blocked") from None
-    if not isinstance(funds,dict) or str(funds.get("dhanClientId"))!=account:
-        raise LiveAmoError("Dhan funds account mismatch")
-    available=dh.checked_number(funds.get("availabelBalance"))
-    if available is None:
-        raise LiveAmoError("Dhan available balance is missing")
-    return available
+    # Reuse the previously verified, GET-only ResultBot funds connector.
+    balances=dh.verify_fund_limits(account,dh.get_json("/fundlimit",token))
+    return balances["availabelBalance"]
 
 
 def _session_closed() -> bool:
@@ -484,13 +472,6 @@ def request_cancel(intent_id:int,automatic:bool=False) -> str:
         raise LiveAmoError("Cannot safely cancel: order ID unverified or intent not active")
     if not re.fullmatch(r"[0-9]{6,25}",item["order_id"]):
         raise LiveAmoError("Cannot cancel without verified Dhan order ID")
-    with connect_db() as con:
-        updated=con.execute(
-            "UPDATE intents SET cancel_attempted=1 WHERE id=? AND cancel_attempted=0",
-            (intent_id,)
-        )
-        if not updated.rowcount:
-            raise LiveAmoError("Cancel already attempted; check Dhan order book")
     account, token=dh.load_credentials()
     if account!=item["account"]:
         raise LiveAmoError("Dhan account mismatch before cancellation")
@@ -501,6 +482,14 @@ def request_cancel(intent_id:int,automatic:bool=False) -> str:
         _update(intent_id,"TERMINAL" if status in TERMINAL else "UNKNOWN",
                 broker_status=status,note="Order already filled/terminal; cancellation not possible")
         return status
+    # Lock and claim ONE cancellation attempt only after broker preflight succeeds.
+    with connect_db() as con:
+        claim=con.execute(
+            "UPDATE intents SET cancel_attempted=1 WHERE id=? AND cancel_attempted=0",
+            (intent_id,)
+        )
+        if claim.rowcount != 1:
+            raise LiveAmoError("Cancel already attempted; check Dhan order book")
     try:
         result=_dhan_http("DELETE","/orders/"+item["order_id"],token)
     except LiveAmoError:
@@ -515,14 +504,79 @@ def request_cancel(intent_id:int,automatic:bool=False) -> str:
     return result_status
 
 
+def _order_by_correlation(correlation: str, token: str) -> dict | None:
+    """Dhan GET /orders/external/{correlationId}; never submit twice on ambiguity."""
+    if not re.fullmatch(r"[a-zA-Z0-9_-]{3,30}",correlation):
+        raise LiveAmoError("Unsafe correlation ID")
+    req=Request("https://api.dhan.co/v2/orders/external/"+correlation,
+                headers={"access-token":token,"Accept":"application/json"},
+                method="GET")
+    try:
+        with urlopen(req,timeout=10) as r:
+            payload=json.loads(r.read(200_000))
+    except HTTPError as exc:
+        if exc.code==404:
+            return None
+        raise LiveAmoError("Cannot reconcile Dhan order by correlation ID") from None
+    except (URLError,OSError,TimeoutError,ValueError):
+        raise LiveAmoError("Broker reconciliation temporarily unavailable") from None
+    if not isinstance(payload,dict):
+        raise LiveAmoError("Unexpected Dhan correlation response")
+    return payload
+
+
+def reconcile_unknown(intent_id:int) -> bool:
+    item=_intent(intent_id)
+    if item["state"]!="UNKNOWN":return False
+    account,token=dh.load_credentials()
+    dh.verified_profile(account,token)
+    if account!=item["account"]:
+        raise LiveAmoError("Dhan account mismatch during reconciliation")
+    order=_order_by_correlation(item["correlation"],token)
+    if order is None:
+        return False  # Absence never authorizes automatic resubmission.
+    if str(order.get("dhanClientId") or "")!=account:
+        raise LiveAmoError("Correlation response belongs to another Dhan account")
+    if str(order.get("correlationId") or "")!=item["correlation"]:
+        raise LiveAmoError("Dhan correlation mismatch")
+    oid=str(order.get("orderId") or "")
+    if not re.fullmatch(r"[0-9]{6,25}",oid):
+        raise LiveAmoError("Dhan correlation returned invalid order ID")
+    # If no verified securityId was stored before a failure, do NOT assume this
+    # correlation represents the intended stock and do not claim confirmation.
+    if not item["security_id"] or str(order.get("securityId") or "")!=item["security_id"]:
+        raise LiveAmoError("Cannot verify order instrument from uncertain submission")
+    if (str(order.get("exchangeSegment"))!="NSE_EQ" or
+        str(order.get("productType"))!="CNC" or
+        str(order.get("transactionType"))!="BUY" or
+        order.get("afterMarketOrder") is not True):
+        raise LiveAmoError("Dhan order route is not the intended Equity AMO")
+    status=str(order.get("orderStatus") or "UNKNOWN").upper()
+    _update(intent_id,"ACKED" if status in ("PENDING","TRANSIT") else "UNKNOWN",
+            order_id=oid,broker_status=status,
+            cancel_after=int(time.time())+CANCEL_SECONDS,
+            note="Broker correlation verified after uncertain order response")
+    _queue(_intent(intent_id),"REAL_AMO_RECONCILED",
+           _broker_card(_intent(intent_id),"Actual Dhan order ID recovered by correlation"))
+    return True
+
+
 def monitor() -> int:
     """Broker verify active orders; auto-attempt cancellation after 120 s."""
     with connect_db() as con:
-        intents=[r[0] for r in con.execute(
-            "SELECT id FROM intents WHERE state IN ('ACKED','CANCEL_REQUESTED') ORDER BY id LIMIT 10"
+        intents=[(r[0],r[1]) for r in con.execute(
+            "SELECT id,state FROM intents WHERE state IN ('UNKNOWN','ACKED','CANCEL_REQUESTED') ORDER BY id LIMIT 10"
         )]
     changed=0
-    for intent_id in intents:
+    for intent_id, initial_state in intents:
+        if initial_state == "UNKNOWN":
+            try:
+                if reconcile_unknown(intent_id):
+                    changed += 1
+            except (LiveAmoError,dh.DhanReadError,OSError,ValueError):
+                pass
+            if _intent(intent_id)["state"]!="ACKED":
+                continue
         item=_intent(intent_id)
         try:
             acct,token=dh.load_credentials()
