@@ -61,6 +61,7 @@ def connect_db(path: Path = STATE_DB) -> sqlite3.Connection:
       source TEXT NOT NULL DEFAULT 'TEST',
       budget INTEGER NOT NULL DEFAULT 500,
       expires INTEGER NOT NULL DEFAULT 0,
+      armed_since INTEGER NOT NULL DEFAULT 0,
       arm_seq INTEGER NOT NULL DEFAULT 0
     );
     INSERT OR IGNORE INTO control(id) VALUES (1);
@@ -90,9 +91,9 @@ def connect_db(path: Path = STATE_DB) -> sqlite3.Connection:
 
 def _control(con) -> dict:
     row=con.execute(
-        "SELECT armed,source,budget,expires,arm_seq FROM control WHERE id=1"
+        "SELECT armed,source,budget,expires,armed_since,arm_seq FROM control WHERE id=1"
     ).fetchone()
-    return dict(zip(("armed","source","budget","expires","arm_seq"),row))
+    return dict(zip(("armed","source","budget","expires","armed_since","arm_seq"),row))
 
 
 def status() -> dict:
@@ -142,8 +143,8 @@ def arm(*, source: str = "TEST", budget: int = BUDGET_DEFAULT) -> dict:
             ).fetchone()[0]
             if count:
                 raise LiveAmoError("Maximum one AMO attempt per IST day; no second entry")
-            con.execute("""UPDATE control SET armed=1,source=?,budget=?,expires=?,arm_seq=arm_seq+1
-                            WHERE id=1""",(source,budget,int(time.time())+ARM_SECONDS))
+            con.execute("""UPDATE control SET armed=1,source=?,budget=?,expires=?,armed_since=?,arm_seq=arm_seq+1
+                            WHERE id=1""",(source,budget,int(time.time())+ARM_SECONDS,int(time.time())))
             con.execute("COMMIT")
         except BaseException:
             con.execute("ROLLBACK")
@@ -173,7 +174,8 @@ def reserve(source: str, msg_id: int, symbol: str, sent_utc: int) -> int | None:
         con.execute("BEGIN IMMEDIATE")
         try:
             c=_control(con)
-            if not(c["armed"] and c["source"]==source and c["expires"]>=now):
+            if not(c["armed"] and c["source"]==source and c["expires"]>=now
+                    and int(sent_utc)>=c["armed_since"]):
                 con.execute("COMMIT")
                 return None
             # Disarm BEFORE any network call, and persist unique intent.
