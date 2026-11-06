@@ -418,6 +418,18 @@ def do_configure_autorenew() -> None:
     print("No trading permissions enabled.")
 
 
+def do_scheduled_refresh() -> None:
+    """Avoid double token generation if Persistent timer fires just after setup."""
+    account, _ = load_credentials()
+    safe_path(CREDS)
+    age = time.time() - CREDS.stat().st_mtime
+    if -30 <= age < 90:
+        print("SKIP: ResultBot token was refreshed less than 90 seconds ago.")
+        print("Verified account:", display_account(account))
+        return
+    do_refresh_token()
+
+
 def do_refresh_token() -> None:
     """A single controlled token refresh, independent of the trading process."""
     with renewal_lock():
@@ -582,6 +594,7 @@ def main() -> None:
     sub.add_parser("configure-autorenew", help="reuse existing .env secrets or securely set up private auto-renewal")
     sub.add_parser("autorenew-status", help="show safe credential-source readiness (no secrets)")
     sub.add_parser("refresh", help="generate and verify a fresh read-only Dhan access token; no orders")
+    sub.add_parser("refresh-scheduled", help="scheduled renewal, skip duplicate immediately after setup")
     sub.add_parser("check", help="verify Dhan profile, account identity and registered IPs")
     p=sub.add_parser("orders",help="list today\\'s order statuses with verified fill prices")
     p.add_argument("--limit",type=int,default=10,choices=range(1,21),metavar="1-20")
@@ -607,6 +620,9 @@ def main() -> None:
         return
     if args.command=="refresh":
         do_refresh_token()
+        return
+    if args.command=="refresh-scheduled":
+        do_scheduled_refresh()
         return
     account, token = load_credentials()
     if args.command=="check":
