@@ -129,7 +129,7 @@ def format_excellent_log(symbol: str, alert_utc: int) -> str:
     if not re.fullmatch(r"[A-Z][A-Z0-9&._-]{0,29}", symbol):
         raise ValueError("Invalid Excellent stock symbol")
     when = datetime.fromtimestamp(int(alert_utc), IST).strftime("%d-%b-%Y %H:%M:%S IST")
-    return "\\n".join((
+    return "\n".join((
         "🏆🔥 <b>RESULTBOT — EXCELLENT RESULTS</b>",
         f"📈 Stock: <b>#{escape(symbol)}</b>",
         "📩 Source: Earnings Pulse",
@@ -137,7 +137,7 @@ def format_excellent_log(symbol: str, alert_utc: int) -> str:
         "✅ Status: Excellent alert captured",
         "🔎 Price study: Tracking verified post-alert candles",
         "",
-        "🏦 <b>Dhan order: NOT SUBMITTED</b>",
+        "🏦 <b>Dhan order (ResultBot research): NOT SUBMITTED</b>",
         "💰 Dhan execution price: N/A",
         "🟡 Research-only mode — no broker order was attempted",
     ))
