@@ -36,6 +36,8 @@ class RealEquityAmoTests(unittest.TestCase):
           patch.object(live,"_session_closed",return_value=True),
           patch.object(dh,"load_credentials",return_value=(ACCOUNT,TOKEN)),
           patch.object(dh,"verified_profile",return_value={"dhanClientId":ACCOUNT}),
+          patch.object(live.watch,"configured_log_group_id",return_value=-5514889030),
+          patch.object(live.watch,"configured_test_group_id",return_value=-5537189123),
           patch.object(live,"_verified_broker_context",return_value=5000.0),
           patch.object(live,"_verified_instrument",return_value=("1333",__import__("decimal").Decimal("0.05"))),
           patch.object(live,"_quote_and_size",return_value=(5,20.0,int(time.time())-120)),
