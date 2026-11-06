@@ -1,6 +1,7 @@
 """Run offline: python -m unittest -v tests.test_resultbot_excellent_watch"""
 import io
 import json
+import sqlite3
 import tempfile
 import unittest
 from datetime import datetime, timezone
@@ -53,6 +54,30 @@ class ExcellentOnlyTests(unittest.TestCase):
             self.assertIsNone(r['first_price'])
             self.assertEqual(r['status'],'NO_VERIFIED_POST_ALERT_CANDLE')
             con.close()
+
+    def test_existing_sqlite_login_read_only(self):
+        # The collector should reuse the original login without prompting OTP
+        # or modifying .env / the .session SQLite database.
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            path = root / "uditbot" / "data" / "tg_userbot.session"
+            path.parent.mkdir(parents=True)
+            with sqlite3.connect(path) as db:
+                db.execute("CREATE TABLE sessions (dc_id INTEGER, server_address TEXT, "
+                           "port INTEGER, auth_key BLOB)")
+                db.execute(
+                    "INSERT INTO sessions VALUES (?,?,?,?)",
+                    (2, "149.154.167.51", 443, bytes(range(256)))
+                )
+            before = path.read_bytes()
+            with patch.object(ew.Path, "home", return_value=root):
+                session_string = ew.existing_sqlite_login()
+            self.assertTrue(session_string.startswith("1"))
+            from telethon.sessions import StringSession
+            session = StringSession(session_string)
+            self.assertEqual(session.dc_id, 2)
+            self.assertEqual(session.port, 443)
+            self.assertEqual(path.read_bytes(), before)
 
     def test_offline_self_test(self):
         ew.self_test()
