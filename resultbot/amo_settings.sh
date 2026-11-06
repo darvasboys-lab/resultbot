@@ -93,38 +93,78 @@ edit_source() {
         echo "Source unchanged."
         return
     fi
-    "$PY" "$BOT" settings --source "$wanted"
+    # A real order may become RESERVED/PREPARING/SUBMITTING between the
+    # confirmation and the actual write; handle that safely without exiting.
+    local outcome
+    if ! outcome="$("$PY" "$BOT" settings --source "$wanted" 2>&1)"; then
+        echo "Source unchanged; edit was blocked safely:"
+        echo "$outcome"
+        echo "Check 'View current settings and order intents' (menu 4)."
+        return 0
+    fi
+    echo "$outcome"
     echo "New source will apply to future eligible alerts. YES/NO unchanged."
 }
 
 edit_budget() {
-    local current desired
+    local current desired min_budget max_budget outcome
     current="$(get_setting per_order_budget_inr)"
-    echo "Current per-order budget: INR $current (valid INR 100 to 1000)"
+    min_budget="$(get_setting budget_min_inr)"
+    max_budget="$(get_setting budget_max_inr)"
+    echo "Current per-order budget: INR $current"
+    echo "Allowed per-order range in the current bot: INR $min_budget–$max_budget"
     if [[ -t 0 ]] && command -v whiptail >/dev/null 2>&1; then
         if ! desired="$(whiptail --title "Equity AMO budget per order" \
-            --inputbox "Whole INR amount, 100 to 1000. This is PER ORDER, not a total daily or order-count limit." \
-            13 78 "$current" 3>&1 1>&2 2>&3)"; then
-            echo "Budget change cancelled."
-            return
+            --inputbox "Enter a whole INR amount ($min_budget–$max_budget). This is PER ORDER; there is no daily order-count limit." \
+            13 80 "$current" 3>&1 1>&2 2>&3)"; then
+            echo "Budget change cancelled. Saved INR $current remains unchanged."
+            return 0
         fi
     else
-        read -r -p "New per-order budget INR (100–1000): " desired
+        read -r -p "New per-order budget (INR $min_budget–$max_budget): " desired
     fi
+
+    # Normalize ordinary input whitespace; reject other formatting.
+    desired="${desired#"''${desired%%[![:space:]]*}''"}"
+    desired="${desired%"''${desired##*[![:space:]]}''"}"
     if [[ ! "$desired" =~ ^[0-9]+$ ]]; then
-        echo "Invalid number; budget unchanged."
-        return
+        echo "INVALID AMOUNT: Please enter whole rupees, e.g. 600."
+        echo "No settings were changed; still INR $current. Returning to menu."
+        return 0
     fi
+
+    # Python avoids Bash 08 / leading-zero parsing and integer overflow.
+    if ! "$PY" -c 'import sys
+try:
+    n=int(sys.argv[1]); lo=int(sys.argv[2]); hi=int(sys.argv[3])
+    sys.exit(0 if lo <= n <= hi else 1)
+except ValueError:
+    sys.exit(1)' "$desired" "$min_budget" "$max_budget"; then
+        echo "OUT OF RANGE: You entered INR $desired."
+        echo "The current per-order limit is INR $min_budget–$max_budget."
+        echo "Your saved budget remains INR $current. Returning to menu."
+        return 0
+    fi
+
     if [[ "$desired" == "$current" ]]; then
-        echo "Budget unchanged."
-        return
+        echo "No change: budget already INR $current."
+        return 0
     fi
-    if ! confirm "Set per-order budget to INR $desired? When AMO is ON, every NEW eligible signal may place a REAL order up to this amount. Existing Dhan orders and the YES/NO switch remain unchanged."; then
-        echo "Budget unchanged."
-        return
+    if ! confirm "Save INR $desired as the PER-ORDER budget for FUTURE eligible real Dhan AMO signals? Existing orders and the YES/NO switch will not be changed."; then
+        echo "Budget unchanged at INR $current."
+        return 0
     fi
-    "$PY" "$BOT" settings --budget "$desired"
-    echo "Budget saved for future alerts. Existing order intents are unchanged."
+
+    # The live engine may reject an edit if an in-flight order is between
+    # reservation and broker submission. Never terminate the entire menu.
+    if ! outcome="$("$PY" "$BOT" settings --budget "$desired" 2>&1)"; then
+        echo "Budget unchanged: live settings check blocked this edit."
+        echo "$outcome"
+        echo "Check menu 4 for any unresolved Dhan order transition."
+        return 0
+    fi
+    echo "$outcome"
+    echo "Budget updated for FUTURE signals only; prior orders unaffected."
 }
 
 echo "======================================================"
