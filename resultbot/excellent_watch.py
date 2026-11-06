@@ -671,6 +671,37 @@ async def listen(con: sqlite3.Connection, *, interval: int = 75):
             test_entity, test_id = await resolve_test_group(client)
         except Exception as exc:
             LOG.warning("ResultBot test input disabled: %s", exc)
+    # Real AMO can only arm through the private, owner-authenticated panel.
+    # The source is still verified by the existing Telethon chat allowlist.
+    amo_module = None
+    live_tasks = set()
+    if log_group is not None:
+        try:
+            import equity_amo_live as amo_module
+            amo_module.connect_db().close()
+            LOG.info("Real Equity AMO one-shot module loaded (OFF by default)")
+        except ImportError:
+            LOG.info("Real Equity AMO module not installed; research-only listener")
+
+    def maybe_real_amo(source, msg, symbol):
+        if amo_module is None or not symbol:
+            return
+        try:
+            reserved=amo_module.reserve(source,int(msg.id),symbol,int(msg.date.timestamp()))
+        except Exception as exc:
+            LOG.warning("Owner-armed AMO reservation blocked: %s",type(exc).__name__)
+            return
+        if reserved is None:
+            return
+        # Network work must never block the Telethon update loop.
+        task=asyncio.create_task(asyncio.to_thread(amo_module.execute,reserved))
+        live_tasks.add(task)
+        def finished(t):
+            live_tasks.discard(t)
+            if not t.cancelled() and t.exception() is not None:
+                LOG.error("Real AMO worker requires manual review: %s",type(t.exception()).__name__)
+        task.add_done_callback(finished)
+
     # Backfill a small gap on startup to recover missed messages, deduped by Telegram ID.
     async def handler(event):
         m = event.message
@@ -680,12 +711,19 @@ async def listen(con: sqlite3.Connection, *, interval: int = 75):
             print(f"[EXCELLENT STORED] #{symbol}  telegram_id={m.id}  {m.date.isoformat()}",flush=True)
             if log_group is not None:
                 enqueue_live_log(con,m.id)
+                # A normal real Earnings Pulse Excellent alert may be selected
+                # only while the owner has specifically armed that source.
+                maybe_real_amo("EARNINGS_PULSE",m,symbol)
         elif verdict == "missing_or_multiple_stock_symbols":
             LOG.warning("Excellent message %s needs manual stock-symbol review", m.id)
 
     client.add_event_handler(handler, events.NewMessage(chats=entity))
     test_scan_task = None
     if test_entity is not None:
+        # Only a message posted by the authenticated Telegram account that
+        # runs this listener may trigger a real Test Group AMO.
+        me = await client.get_me()
+        owner_tg_id = int(me.id)
         def record_test_message(message, source: str) -> str:
             verdict = enqueue_test_log(
                 con, test_id, message.id, message.date, message.raw_text or ""
@@ -697,6 +735,14 @@ async def listen(con: sqlite3.Connection, *, interval: int = 75):
                 )
             elif verdict not in ("not_excellent", "duplicate"):
                 LOG.info("Test Group message ignored (%s): %s", source, verdict)
+            raw = message.raw_text or ""
+            if raw.startswith("[RBLIVEAMO] "):
+                sender = getattr(message,"sender_id",None)
+                if sender is not None and int(sender)==owner_tg_id:
+                    symbol,_=parse_test_alert(raw)
+                    maybe_real_amo("TEST",message,symbol)
+                else:
+                    LOG.warning("Real-AMO Test Group command rejected: not the owner account")
             return verdict
 
         async def test_handler(event):
@@ -751,7 +797,7 @@ async def listen(con: sqlite3.Connection, *, interval: int = 75):
         except OSError as e:
             LOG.warning("Backfill retry %d: %s", attempt+1,e)
             await asyncio.sleep(3)
-    print("[LISTEN] @earnings_pulse | ONLY Excellent Results | no order execution",flush=True)
+    print("[LISTEN] @earnings_pulse | Excellent Results; REAL AMO only with owner WebUI ON",flush=True)
     async def log_poller():
         while True:
             try:
@@ -782,6 +828,17 @@ async def listen(con: sqlite3.Connection, *, interval: int = 75):
         LOG.info("ResultBot Dhan GET-only linked-order monitor enabled")
     except ImportError:
         LOG.info("Optional Dhan GET-only bridge not installed; Excellent collector unchanged")
+    async def real_amo_monitor():
+        while True:
+            if amo_module is not None:
+                try:
+                    await asyncio.to_thread(amo_module.monitor)
+                except asyncio.CancelledError:
+                    raise
+                except Exception as exc:
+                    LOG.warning("Real Equity AMO broker monitor unavailable: %s",type(exc).__name__)
+            await asyncio.sleep(25)
+    amo_monitor_task=asyncio.create_task(real_amo_monitor())
     async def price_poller():
         while True:
             now = datetime.now(IST)
@@ -800,6 +857,8 @@ async def listen(con: sqlite3.Connection, *, interval: int = 75):
         poll.cancel()
         log_task.cancel()
         if broker_task: broker_task.cancel()
+        amo_monitor_task.cancel()
+        for t in live_tasks: t.cancel()
         if test_scan_task: test_scan_task.cancel()
         if guard: guard.cancel()
         await client.disconnect()
