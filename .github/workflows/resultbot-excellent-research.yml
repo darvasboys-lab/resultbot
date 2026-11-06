@@ -8,7 +8,6 @@ on:
       - "resultbot/dhan_bridge.py"
       - "resultbot/equity_amo_preview.py"
       - "resultbot/equity_amo_live.py"
-      - "resultbot/amo_panel.py"
       - "resultbot/install_real_amo.sh"
       - "resultbot/amo_yes_no.sh"
       - "tests/test_resultbot_real_equity_amo.py"
@@ -29,7 +28,6 @@ on:
       - "resultbot/dhan_bridge.py"
       - "resultbot/equity_amo_preview.py"
       - "resultbot/equity_amo_live.py"
-      - "resultbot/amo_panel.py"
       - "resultbot/install_real_amo.sh"
       - "resultbot/amo_yes_no.sh"
       - "tests/test_resultbot_real_equity_amo.py"
@@ -56,7 +54,7 @@ jobs:
       - name: Install limited test dependencies
         run: python -m pip install "telethon==1.38.1" "python-dotenv>=1.0.1,<2.0.0"
       - name: Compile ResultBot research and Dhan GET-only connector
-        run: python -m py_compile resultbot/excellent_watch.py resultbot/dhan_readonly.py resultbot/dhan_bridge.py resultbot/equity_amo_preview.py resultbot/equity_amo_live.py resultbot/amo_panel.py
+        run: python -m py_compile resultbot/excellent_watch.py resultbot/dhan_readonly.py resultbot/dhan_bridge.py resultbot/equity_amo_preview.py resultbot/equity_amo_live.py
       - name: Syntax-check isolated ResultBot token timer installer
         run: bash -n resultbot/install_dhan_autorenew.sh
       - name: Syntax-check real AMO terminal YES/NO installer and menu
