@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 """Standalone ResultBot DhanHQ v2 READ-ONLY client.
 
-Capabilities: GET /profile, GET /ip/getIP, GET /orders,
-GET /orders/{id}, GET /trades. No POST/PUT/DELETE, SDK order methods,
-Telegram notifications, or broker mutations. Not imported by trading_bot.
+Capabilities: GET /profile, GET /ip/getIP, GET /fundlimit, GET /orders,
+GET /orders/{id}, GET /trades. No order-placement, modification or
+cancellation methods, SDK order methods, Telegram notifications, or
+broker mutations. The separate TOTP authentication flow uses its own POST.
+Not imported by trading_bot.
 """
 from __future__ import annotations
 
@@ -34,7 +36,7 @@ ROOT = Path.home() / "resultbot-data"
 CREDS = ROOT / ".dhan_readonly.json"
 AUTORENEW = ROOT / ".dhan_autorenew.json"
 RENEW_LOCK = ROOT / ".dhan_autorenew.lock"
-ALLOWED = frozenset({"/profile", "/ip/getIP", "/orders", "/trades"})
+ALLOWED = frozenset({"/profile", "/ip/getIP", "/fundlimit", "/orders", "/trades"})
 
 
 class DhanReadError(Exception):
@@ -159,6 +161,75 @@ def checked_number(value: object) -> float | None:
     except (TypeError, ValueError):
         return None
     return n if math.isfinite(n) and n >= 0 else None
+
+
+# Documented DhanHQ v2 /fundlimit response keys, including the broker's
+# original misspelling "availabelBalance".
+FUND_FIELDS = (
+    ("availabelBalance", "Available to trade"),
+    ("utilizedAmount", "Funds utilised"),
+    ("withdrawableBalance", "Withdrawable balance"),
+    ("sodLimit", "Start-of-day limit"),
+    ("collateralAmount", "Collateral"),
+    ("receiveableAmount", "Receivable funds"),
+    ("blockedPayoutAmount", "Blocked payout"),
+)
+
+
+def verify_fund_limits(account: str, response: object) -> dict[str, float | None]:
+    """Fail closed on account mismatch and malformed balances; never infer funds.
+
+    The GET /fundlimit response is not guaranteed to match available cash that
+    can be used for any particular order; broker margin/risk checks still apply.
+    """
+    if not valid_account(account):
+        raise DhanReadError("Invalid account provided for balance verification")
+    if not isinstance(response, dict):
+        raise DhanReadError("Dhan fund-limit response has invalid structure")
+    if str(response.get("dhanClientId") or "") != account:
+        raise DhanReadError("Dhan funds account mismatch; refusing balance")
+    verified: dict[str, float | None] = {}
+    for key, _ in FUND_FIELDS:
+        value = response.get(key)
+        if value is None:
+            if key == "availabelBalance":
+                raise DhanReadError(
+                    "Dhan did not provide its required availabelBalance field"
+                )
+            verified[key] = None
+            continue
+        # Explicitly reject bool and values that cannot be trusted as money.
+        if isinstance(value, bool):
+            raise DhanReadError("Dhan returned an invalid numeric balance")
+        amount = checked_number(value)
+        if amount is None:
+            raise DhanReadError("Dhan returned a negative or invalid fund-limit amount")
+        verified[key] = amount
+    return verified
+
+
+def do_funds(account: str, token: str) -> None:
+    """Verify a LIVE broker balance via GET requests only; no order creation."""
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    profile = verified_profile(account, token)
+    balances = verify_fund_limits(account, get_json("/fundlimit", token))
+    now = datetime.now(ZoneInfo("Asia/Kolkata"))
+    print("======================================================")
+    print("     RESULTBOT — DHAN LIVE FUNDS (READ-ONLY)")
+    print("======================================================")
+    print("Broker account verified : ", display_account(account))
+    print("Balance retrieved at    : ", now.strftime("%d-%b-%Y %H:%M:%S IST"))
+    print("Token valid until       : ", str(profile.get("tokenValidity") or "Not supplied"))
+    for key, label in FUND_FIELDS:
+        amount = balances[key]
+        shown = f"INR {amount:,.2f}" if amount is not None else "NOT PROVIDED"
+        print(f"{label:<24}: {shown}")
+    print("------------------------------------------------------")
+    print("Source: DhanHQ GET /v2/fundlimit (live API response).")
+    print("Available-to-trade is a broker balance, NOT an AMO margin approval.")
+    print("NO order submitted, modified or cancelled. Trading remains disabled.")
 
 
 def fill_info(order: dict) -> tuple[str, str, str]:
@@ -559,6 +630,7 @@ def do_order(account: str, token: str, order_id: str) -> None:
 def self_test() -> None:
     assert safe_endpoint("/profile") == BASE + "/profile"
     assert safe_endpoint("/trades") == BASE + "/trades"
+    assert safe_endpoint("/fundlimit") == BASE + "/fundlimit"
     assert safe_endpoint("/orders/123456789") == BASE + "/orders/123456789"
     for invalid in ("/orders/1/modify", "/orders/slicing", "/forever/orders", "/orders/123?x=1", "/RenewToken"):
         try:
@@ -596,6 +668,8 @@ def main() -> None:
     sub.add_parser("refresh", help="generate and verify a fresh read-only Dhan access token; no orders")
     sub.add_parser("refresh-scheduled", help="scheduled renewal, skip duplicate immediately after setup")
     sub.add_parser("check", help="verify Dhan profile, account identity and registered IPs")
+    sub.add_parser("funds", help="fetch LIVE Dhan funds via read-only broker API; no orders")
+    sub.add_parser("balance", help="alias: verified LIVE available trading balance")
     p=sub.add_parser("orders",help="list today\\'s order statuses with verified fill prices")
     p.add_argument("--limit",type=int,default=10,choices=range(1,21),metavar="1-20")
     p=sub.add_parser("trades",help="list today\\'s exchange trades")
@@ -627,6 +701,8 @@ def main() -> None:
     account, token = load_credentials()
     if args.command=="check":
         do_check(account,token)
+    elif args.command in ("funds", "balance"):
+        do_funds(account, token)
     elif args.command=="orders":
         do_orders(account,token,args.limit)
     elif args.command=="trades":
