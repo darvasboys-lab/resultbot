@@ -44,12 +44,12 @@ select_menu() {
           "0" "Exit without further changes" \
           3>&1 1>&2 2>&3
     else
-        echo
-        echo "1) Edit alert source"
-        echo "2) Edit per-order budget"
-        echo "3) Turn AMO YES / NO"
-        echo "4) View current settings and order intents"
-        echo "0) Exit"
+        echo >&2
+        echo "1) Edit alert source" >&2
+        echo "2) Edit per-order budget" >&2
+        echo "3) Turn AMO YES / NO" >&2
+        echo "4) View current settings and order intents" >&2
+        echo "0) Exit" >&2
         local choice
         read -r -p "Select an option: " choice
         printf '%s' "$choice"
