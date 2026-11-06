@@ -11,8 +11,10 @@ Once the owner selects **YES** in `amo_yes_no.sh`:
 - **Every distinct, new, eligible Excellent Results alert** from the official
   monitored Earnings Pulse channel may create its own genuine Dhan Equity AMO.
 - The owner's authenticated Telegram account may deliberately trigger a real
-  order by posting a new `[RBLIVEAMO] ... Excellent Results` message in the
-  configured ResultBot Test Group.
+  order by posting a **new ordinary Excellent Results** message in the
+  configured ResultBot Test Group (for example `#YESBANK - Excellent Results`).
+  The `[RBLIVEAMO]` prefix is optional. Older `[RBAMO]` simulation and
+  `[RBTEST]` messages remain non-trading even when AMO is ON.
 - No artificial one-order limit, maximum number per day, one-shot disarm,
   or ten-minute expiry. It stays ON until you explicitly select **NO**
   (or a critical safety gate disables entries).
@@ -85,13 +87,16 @@ type `YES` or `NO`. You can repeat this operation whenever you wish.
 Example manual trigger (owner-only, Test Group):
 
 ```text
-[RBLIVEAMO] #YESBANK - 🏆🔥 Excellent Results
+#YESBANK - 🏆🔥 Excellent Results
 ```
 
 The same ON switch enables naturally arriving, unprefixed official
 Earnings Pulse Excellent alerts. Only newly received strict Excellent
-signals are eligible. Old/replayed, unwanted, duplicate, or non-Excellent
-messages cannot submit AMOs.
+signals are eligible. The separate Test Group receipt means only that
+Telegram delivered the message: a genuine Dhan order ID is shown only
+on a distinct verified broker card and in the AMO status database.
+Old/replayed, unauthorized, duplicate, or non-Excellent messages
+cannot submit AMOs.
 
 ## Safety, brokerage verification and transparency
 
