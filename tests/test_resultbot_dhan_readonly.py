@@ -242,6 +242,26 @@ class DhanReadOnlyTests(unittest.TestCase):
             login.assert_not_called()
             writer.assert_not_called()
 
+    def test_scheduled_refresh_skips_duplicate_new_token(self):
+        with tempfile.TemporaryDirectory() as td:
+            path=Path(td)/"cred.json"
+            path.write_text("dummy")
+            with patch.object(dh,"CREDS",path), \
+                 patch.object(dh,"load_credentials",return_value=("1105508885","X"*50)), \
+                 patch.object(dh,"do_refresh_token") as renew:
+                dh.do_scheduled_refresh()
+                renew.assert_not_called()
+                os.utime(path,(path.stat().st_atime,path.stat().st_mtime-3600))
+                dh.do_scheduled_refresh()
+                renew.assert_called_once()
+
+    def test_private_auto_credentials_override_other_bot_env(self):
+        with patch.object(dh,"_load_private_autorenew",return_value=("123456","JBSWY3DPEHPK3PXP")), \
+             patch.object(dh,"_read_existing_bot_env") as existing:
+            src=dh.renewal_source("1105508885")
+            self.assertEqual(src[0],"private ResultBot config")
+            existing.assert_not_called()
+
     def test_builtin_self_test(self):
         dh.self_test()
 
