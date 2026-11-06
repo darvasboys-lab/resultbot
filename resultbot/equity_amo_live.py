@@ -49,7 +49,8 @@ class LiveAmoError(Exception):
     pass
 
 
-def connect_db(path: Path = STATE_DB) -> sqlite3.Connection:
+def connect_db(path: Path | None = None) -> sqlite3.Connection:
+    path = STATE_DB if path is None else path
     path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     con=sqlite3.connect(str(path),timeout=20,isolation_level=None)
     con.execute("PRAGMA busy_timeout=20000")
