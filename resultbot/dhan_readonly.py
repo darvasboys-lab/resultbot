@@ -13,6 +13,8 @@ import binascii
 import hashlib
 import hmac
 import getpass
+import fcntl
+from contextlib import contextmanager
 import json
 import math
 import os
@@ -30,6 +32,8 @@ from urllib.parse import urlencode
 BASE = "https://api.dhan.co/v2"
 ROOT = Path.home() / "resultbot-data"
 CREDS = ROOT / ".dhan_readonly.json"
+AUTORENEW = ROOT / ".dhan_autorenew.json"
+RENEW_LOCK = ROOT / ".dhan_autorenew.lock"
 ALLOWED = frozenset({"/profile", "/ip/getIP", "/orders", "/trades"})
 
 
@@ -274,6 +278,163 @@ def token_from_pin_totp(account: str, pin: str, totp: str) -> str:
     return token
 
 
+
+@contextmanager
+def renewal_lock(path: Path = RENEW_LOCK):
+    """Prevent two refresh invocations from generating competing credentials."""
+    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    path.parent.chmod(0o700)
+    safe_path(path)
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+    try:
+        os.fchmod(fd, 0o600)
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        yield
+    finally:
+        fcntl.flock(fd, fcntl.LOCK_UN)
+        os.close(fd)
+
+
+def _valid_autorenew(account: str, pin: str, seed: str) -> None:
+    if not valid_account(account):
+        raise DhanReadError("Auto-renewal account ID invalid")
+    if not re.fullmatch(r"[0-9]{6}", pin or ""):
+        raise DhanReadError("Auto-renewal PIN invalid or missing")
+    current_totp_from_secret(seed, timestamp=59)
+
+
+def _read_existing_bot_env(account: str, env_path: Path | None = None):
+    """Prefer existing original-bot secrets; never echo or modify the .env."""
+    from dotenv import dotenv_values
+    path = env_path or (Path.home() / "uditbot" / ".env")
+    if not path.is_file():
+        return None
+    safe_path(path)
+    if path.stat().st_mode & 0o077:
+        raise DhanReadError("Existing bot .env permissions unsafe; require chmod 600")
+    data = dotenv_values(path)
+    pin = str(data.get("DHAN_PIN") or "").strip()
+    seed = str(data.get("DHAN_TOTP_SECRET") or "").strip()
+    if not pin or not seed:
+        return None
+    from_env = str(data.get("DHAN_CLIENT_ID") or "").strip()
+    if from_env != account:
+        raise DhanReadError(
+            "Existing bot .env Dhan account differs from verified ResultBot account"
+        )
+    _valid_autorenew(account, pin, seed)
+    return pin, seed
+
+
+def _load_private_autorenew(account: str, path: Path = AUTORENEW):
+    safe_path(path)
+    if not path.exists():
+        return None
+    if path.stat().st_mode & 0o077:
+        raise DhanReadError("Private auto-renewal credentials require chmod 600")
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        raise DhanReadError("Auto-renewal configuration is unreadable")
+    if not isinstance(data, dict) or str(data.get("dhanClientId")) != account:
+        raise DhanReadError("Auto-renewal account mismatch")
+    pin = data.get("pin")
+    seed = data.get("totpSecret")
+    _valid_autorenew(account, pin, seed)
+    return pin, seed
+
+
+def renewal_source(account: str):
+    """Private ResultBot credentials override optional existing cloned-bot .env."""
+    private = _load_private_autorenew(account)
+    if private:
+        return "private ResultBot config", *private
+    existing = _read_existing_bot_env(account)
+    if existing:
+        return "existing bot .env", *existing
+    return None
+
+
+def store_autorenew(account: str, pin: str, seed: str, path: Path = AUTORENEW) -> None:
+    _valid_autorenew(account, pin, seed)
+    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    path.parent.chmod(0o700)
+    safe_path(path)
+    payload = json.dumps({"dhanClientId": account, "pin": pin, "totpSecret": seed})
+    fd, temporary = tempfile.mkstemp(prefix=".dhan_autorenew_", dir=str(path.parent))
+    try:
+        os.fchmod(fd, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as out:
+            out.write(payload)
+            out.flush()
+            os.fsync(out.fileno())
+        os.replace(temporary, path)
+        path.chmod(0o600)
+    finally:
+        if os.path.exists(temporary):
+            os.unlink(temporary)
+
+
+def do_autorenew_status() -> None:
+    account, _ = load_credentials()
+    source = renewal_source(account)
+    print("ResultBot auto-renewal:", "READY" if source else "NOT CONFIGURED")
+    print("Dhan account:", display_account(account))
+    print("Credential source:", source[0] if source else "none")
+    print("Cached access token exists; renewal will replace it atomically")
+    print("Trading service is not started by auto-renewal.")
+
+
+def do_configure_autorenew() -> None:
+    """Reuse existing .env if available; otherwise opt in to securely storing keys."""
+    account, token = load_credentials()
+    verified_profile(account, token)
+    existing = renewal_source(account)
+    if existing:
+        print("READY: auto-renewal credentials already available in", existing[0])
+        print("No PIN or TOTP setup key re-entry needed.")
+        return
+    if not sys.stdin.isatty():
+        raise DhanReadError("Auto-renewal setup requires an interactive terminal")
+    print("No reusable Dhan PIN and TOTP setup key found in the existing bot .env.")
+    print("Unattended daily renewal requires storing PIN and TOTP setup key")
+    print("in a local plain-text file protected by chmod 600; not in GitHub.")
+    confirm = input("Type STORE to authorize secure local credential storage: ").strip()
+    if confirm != "STORE":
+        print("Cancelled. No private auto-renewal configuration created.")
+        return
+    pin = getpass.getpass("Existing 6-digit Dhan PIN (hidden): ").strip()
+    seed = getpass.getpass("Existing 16-character TOTP setup key (hidden): ").strip()
+    _valid_autorenew(account, pin, seed)
+    store_autorenew(account, pin, seed)
+    print("READY: auto-renewal configuration saved privately (0600).")
+    print("Dhan account:", display_account(account))
+    print("No trading permissions enabled.")
+
+
+def do_refresh_token() -> None:
+    """A single controlled token refresh, independent of the trading process."""
+    with renewal_lock():
+        account, old_token = load_credentials()
+        source = renewal_source(account)
+        if not source:
+            raise DhanReadError(
+                "Automatic renewal not configured: run configure-autorenew "
+                "or supply DHAN_PIN and DHAN_TOTP_SECRET in your private bot .env"
+            )
+        _, pin, seed = source
+        code = current_totp_from_secret(seed)
+        candidate = token_from_pin_totp(account, pin, code)
+        profile = verified_profile(account, candidate)
+        # Commit only once Dhan has confirmed account ownership. The old token
+        # remains untouched if generation or profile verification fails.
+        store_credentials(account, candidate)
+        print("SUCCESS: ResultBot Dhan token auto-refreshed and account verified.")
+        print("Verified Dhan account:", display_account(account))
+        print("New token valid until:", str(profile.get("tokenValidity") or "Not supplied"))
+        print("Stored PIN/TOTP setup keys are NOT logged; trading remains disabled.")
+
+
 def do_setup_totp() -> None:
     if not sys.stdin.isatty():
         raise DhanReadError("TOTP setup requires an interactive VM terminal")
@@ -412,6 +573,9 @@ def main() -> None:
     sub.add_parser("self-test")
     sub.add_parser("setup", help="privately enter a pre-generated Dhan access token")
     sub.add_parser("setup-totp", help="generate access token using hidden PIN and 6-digit code OR 16-character TOTP key")
+    sub.add_parser("configure-autorenew", help="reuse existing .env secrets or securely set up private auto-renewal")
+    sub.add_parser("autorenew-status", help="show safe credential-source readiness (no secrets)")
+    sub.add_parser("refresh", help="generate and verify a fresh read-only Dhan access token; no orders")
     sub.add_parser("check", help="verify Dhan profile, account identity and registered IPs")
     p=sub.add_parser("orders",help="list today\\'s order statuses with verified fill prices")
     p.add_argument("--limit",type=int,default=10,choices=range(1,21),metavar="1-20")
@@ -428,6 +592,15 @@ def main() -> None:
         return
     if args.command=="setup-totp":
         do_setup_totp()
+        return
+    if args.command=="configure-autorenew":
+        do_configure_autorenew()
+        return
+    if args.command=="autorenew-status":
+        do_autorenew_status()
+        return
+    if args.command=="refresh":
+        do_refresh_token()
         return
     account, token = load_credentials()
     if args.command=="check":
