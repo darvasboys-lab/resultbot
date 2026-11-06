@@ -16,6 +16,7 @@ on:
   push:
     branches:
       - "feature/excellent-only-collector-20261106"
+      - "feature/resultbot-dhan-funds-readonly-20261107"
     paths:
       - "resultbot/excellent_watch.py"
       - "resultbot/dhan_readonly.py"
