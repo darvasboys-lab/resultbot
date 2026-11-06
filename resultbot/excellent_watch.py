@@ -776,10 +776,10 @@ def main():
             print("Log Group configuration invalid:", exc)
             configured = False
         print("ResultBot Excellent notifications | destination configured:", "YES" if configured else "NO")
-        for state, count in con.execute(
-            "SELECT state, COUNT(*) FROM log_outbox GROUP BY state ORDER BY state"
+        for kind, state, count in con.execute(
+            "SELECT kind,state,COUNT(*) FROM log_outbox GROUP BY kind,state ORDER BY kind,state"
         ):
-            print("  ",state,":",count)
+            print("  ",kind,"/",state,":",count)
         try:
             test_configured = configured_test_group_id() is not None
         except ValueError:
