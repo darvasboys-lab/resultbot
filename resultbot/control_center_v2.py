@@ -94,7 +94,7 @@ def bot_status_indicator(amo_enabled, listener_running):
     if amo_enabled is True and listener_running is True:
         return "BOT LIVE (AMO)", 12
     if listener_running is True:
-        return "BOT LISTENING", 3
+        return "BOT LISTENING", 12
     if listener_running is False:
         return "BOT OFFLINE", 13
     return "BOT STATUS ?", 3
@@ -116,7 +116,8 @@ def colors():
             (255, 18), (236, 253), (255, 24), (238, 255),
             (235, 221), (28, 255), (160, 255), (241, 253),
             (246, 255), (238, 251), (236, 255),
-            (46, 24), (196, 24),  # green/red dots on title blue
+            (46, 24), (196, 24),  # green/red status on blue
+            (34, 255),  # green banknote icon on white card
         ]
     else:
         scheme = [
@@ -133,6 +134,7 @@ def colors():
             (curses.COLOR_BLACK, curses.COLOR_WHITE),
             (curses.COLOR_GREEN, curses.COLOR_BLUE),
             (curses.COLOR_RED, curses.COLOR_BLUE),
+            (curses.COLOR_GREEN, curses.COLOR_WHITE),
         ]
     for num, pair in enumerate(scheme, 1):
         curses.init_pair(num, *pair)
@@ -193,12 +195,15 @@ def render(win, state, page, entries, selection, focus, note="", amount="", plan
     live_label, dot_style = bot_status_indicator(state.get("amo_enabled"), listener_running)
     status_x = left + width - 19
     draw_text(win, top + 1, status_x, "●", dot_style, 1)
-    draw_text(win, top + 1, status_x + 2, live_label, 3, 16)
+    draw_text(win, top + 1, status_x + 2, live_label,
+              dot_style if listener_running is True else 3, 16)
 
     draw_text(win, top + (3 if compact else 4), left + 3,
               "CURRENT CONFIGURATION", 8)
     budget = state.get("per_order_budget_inr")
     amount_label = "₹{:,.0f}".format(budget) if isinstance(budget, int) else "Unavailable"
+    # Leave room for a two-cell green cash emoji in the PER ORDER card.
+    money_value = "   " + amount_label if isinstance(budget, int) else amount_label
     on = state.get("amo_enabled")
     amo_label, amo_style = amo_status_indicator(on)
     amo_description = ("AMO entry armed" if listener_running is True
@@ -206,13 +211,16 @@ def render(win, state, page, entries, selection, focus, note="", amount="", plan
     cards = (
         ("TRADING AMO", amo_label, amo_description, amo_style),
         ("ALERT SOURCE", str(state.get("source", "UNKNOWN")), "Telegram sources", 4),
-        ("PER ORDER", amount_label, "Future orders only", 4),
+        ("PER ORDER", money_value, "Future orders only", 4),
     )
     card_width = (width - 10) // 3
     for i, props in enumerate(cards):
-        card(win, top + (4 if compact else 5),
-             left + 3 + i * (card_width + 2), card_width,
+        card_top = top + (4 if compact else 5)
+        card_left = left + 3 + i * (card_width + 2)
+        card(win, card_top, card_left, card_width,
              *props, compact=compact)
+        if i == 2 and isinstance(budget, int):
+            draw_text(win, card_top + 2, card_left + 2, "💵", 14, 2)
 
     draw_text(win, top + (8 if compact else 11), left + 3,
               "─" * (width - 6), 8, width - 6)
