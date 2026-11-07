@@ -1,0 +1,20 @@
+[Unit]
+Description=AuditBot WebUI (localhost-only; setup dashboard)
+After=network.target
+
+[Service]
+Type=simple
+User=amansingh111111111
+Group=amansingh111111111
+WorkingDirectory=/home/amansingh111111111/uditbot
+Environment= # Inline values omitted for review
+ExecStart=/home/amansingh111111111/uditbot/venv/bin/python3 -m src.setup_app --host 127.0.0.1 --port 80
+Restart=on-failure
+RestartSec=5
+UMask=0077
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+NoNewPrivileges=false
+# Do not add CapabilityBoundingSet=CAP_NET_BIND_SERVICE: blocks sudo capabilities.
+
+[Install]
+WantedBy=multi-user.target

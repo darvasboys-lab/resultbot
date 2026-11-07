@@ -1,3 +1,13 @@
+# ResultBot — fresh VM installation
+
+For the current ResultBot installer, retro settings menu and commands, see
+[RESULTBOT_INSTALL.md](RESULTBOT_INSTALL.md).
+
+The original AuditBot documentation is preserved below. Its old installation
+commands are not the ResultBot release installer.
+
+---
+
 # Telegram-to-Dhan Trading Bot (Single-Account Architecture)
 
 A dedicated, high-precision automated trade execution system for single operator **Udit**, connecting Telegram signal channels directly to **DhanHQ API v2** on a dedicated Google Compute Engine (GCE) VM.

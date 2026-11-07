@@ -20,3 +20,6 @@ venv/
 /today_bot_logs.txt
 *.bak
 *.backup_*
+
+.resultbot-install-stage
+*.install-tmp

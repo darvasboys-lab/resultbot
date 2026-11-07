@@ -1,0 +1,14 @@
+[Unit]
+Description=ResultBot DhanHQ read-only access token auto-refresh (no order entry)
+Wants=network-online.target time-sync.target
+After=network-online.target time-sync.target
+
+[Service]
+Type=oneshot
+ExecStart=/home/amansingh111111111/uditbot/venv/bin/python /home/amansingh111111111/resultbot-data/dhan_readonly.py refresh-scheduled
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+TimeoutStartSec=90s
+StandardOutput=journal
+StandardError=journal

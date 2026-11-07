@@ -1,0 +1,17 @@
+[Unit]
+Description=ResultBot Excellent-only Telegram research listener and price tracker (no trading)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/uditbot
+ExecStart=%h/uditbot/venv/bin/python %h/resultbot-data/excellent_watch.py listen
+Restart=on-failure
+RestartSec=20
+Environment= # Inline values omitted for review
+UMask=0077
+NoNewPrivileges=true
+
+[Install]
+WantedBy=default.target

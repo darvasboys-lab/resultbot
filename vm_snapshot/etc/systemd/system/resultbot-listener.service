@@ -1,0 +1,18 @@
+[Unit]
+Description=ResultBot Telegram Earnings Listener
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=amansingh111111111
+Group=amansingh111111111
+WorkingDirectory=/home/amansingh111111111/uditbot
+ExecStart=/home/amansingh111111111/uditbot/venv/bin/python -u /home/amansingh111111111/resultbot-data/live_listener.py
+Restart=on-failure
+RestartSec=10
+UMask=0077
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target

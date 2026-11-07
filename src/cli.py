@@ -33,7 +33,7 @@ def _mask_account_id(acct: str) -> str:
 
 def print_banner():
     print("=======================================================")
-    print("      UDIT'S TELEGRAM-TO-DHAN BOT (SINGLE-ACCOUNT)     ")
+    print("      RESULTBOT - EARNINGS & RESULTS MONITOR     ")
     print("=======================================================")
 
 
@@ -46,7 +46,7 @@ def cmd_status(cfg: AppConfig, db: JournalDB, stop_mgr: EmergencyStopManager):
         if is_stopped else "🟢 NORMAL (Trading Allowed)"
     )
 
-    print(f"[*] Emergency STOP Status  : {stop_str}")
+    print(f"[*] Stop Status            : {stop_str}")
     print(f"[*] Operating Master Switch : {cfg.trading_mode.value}")
     print(f"[*] Equity Trading Active  : {'YES' if cfg.equity_active else 'NO'}")
     print(f"[*] Stock Options Active   : {'YES' if cfg.fno_active else 'NO'}")
@@ -79,7 +79,7 @@ def cmd_dashboard(cfg: AppConfig, db: JournalDB, stop_mgr: EmergencyStopManager)
     Zero broker network mutations or unverified claims of active protection.
     """
     print("=======================================================")
-    print("           AUDIT BOT READ-ONLY SSH DASHBOARD           ")
+    print("           RESULTBOT READ-ONLY SSH DASHBOARD           ")
     print("=======================================================")
     stop_state = stop_mgr.get_state()
     is_stopped = stop_state.get("is_stopped", False)
@@ -91,7 +91,7 @@ def cmd_dashboard(cfg: AppConfig, db: JournalDB, stop_mgr: EmergencyStopManager)
     allowlist_status = f"{allowlist_count} channel(s)" if allowlist_count > 0 else "⚠️ EMPTY (Blocked in LIVE)"
 
     print(f"[*] Operating Mode      : {cfg.trading_mode.value}")
-    print(f"[*] Emergency STOP      : {stop_str}")
+    print(f"[*] Stop Status         : {stop_str}")
     print(f"[*] Dhan Account ID     : {_mask_account_id(cfg.dhan_client_id)}")
     print(f"[*] Source Allowlist    : {allowlist_status}")
     print(f"[*] Active Segments     : Equity={'YES' if cfg.equity_active else 'NO'} | F&O={'YES' if cfg.fno_active else 'NO'}")

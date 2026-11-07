@@ -1,0 +1,19 @@
+[Unit]
+Description=AuditBot Telegram-to-Dhan Trading Service
+Wants=time-sync.target
+After=network-online.target time-sync.target
+
+[Service]
+Type=simple
+User=amansingh111111111
+Group=amansingh111111111
+WorkingDirectory=/home/amansingh111111111/uditbot
+EnvironmentFile=/home/amansingh111111111/uditbot/.env
+ExecStart=/home/amansingh111111111/uditbot/venv/bin/python3 run.py
+Restart=on-failure
+RestartSec=10
+UMask=0077
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,213 @@
+#!/usr/bin/env bash
+# ResultBot live Equity AMO settings: terminal-only, no WebUI or service restart.
+# Changing settings never toggles YES/NO or cancels an existing Dhan order.
+set -euo pipefail
+umask 077
+
+PY="$HOME/uditbot/venv/bin/python"
+D="$HOME/resultbot-data"
+BOT="$D/equity_amo_live.py"
+TOGGLE="$D/amo_yes_no.sh"
+
+if [[ ! -x "$PY" || ! -f "$BOT" ]]; then
+    echo "ResultBot AMO not installed." >&2
+    exit 1
+fi
+
+
+# BEGIN RESULTBOT RETRO THEME
+export NEWT_COLORS='
+root=white,blue
+window=black,lightgray
+border=blue,lightgray
+title=blue,lightgray
+textbox=black,lightgray
+acttextbox=black,lightgray
+entry=black,white
+disentry=gray,lightgray
+label=blue,lightgray
+button=black,cyan
+actbutton=white,blue
+checkbox=black,lightgray
+actcheckbox=white,blue
+listbox=black,lightgray
+actlistbox=white,blue
+actsellistbox=white,blue
+sellistbox=blue,lightgray
+compactbutton=white,blue
+shadow=black,black
+'
+whiptail() {
+    command whiptail \
+        --backtitle "RESULTBOT  |  CONTROL CENTER  |  Arrow keys: move   Enter: select   Esc: back" \
+        "$@"
+}
+# END RESULTBOT RETRO THEME
+
+get_setting() {
+    local field="$1"
+    "$PY" "$BOT" settings --show | "$PY" -c \
+       'import json,sys; data=json.load(sys.stdin); print(data[sys.argv[1]])' "$field"
+}
+
+confirm() {
+    local message="$1"
+    if [[ -t 0 ]] && command -v whiptail >/dev/null 2>&1; then
+        whiptail --title "RESULTBOT  |  CONFIRM CHANGE" --defaultno \
+          --yesno "$message" 14 80
+    else
+        local answer="NO"
+        read -r -p "$message [type YES to confirm]: " answer
+        [[ "$answer" == "YES" ]]
+    fi
+}
+
+notice() {
+    local message="$1"
+    if [[ -t 0 ]] && command -v whiptail >/dev/null 2>&1; then
+        whiptail --title "RESULTBOT  |  NOTICE" \
+          --msgbox "$message" 13 80 || true
+    else
+        printf '%s\n' "$message"
+    fi
+}
+
+select_menu() {
+    if [[ -t 0 ]] && command -v whiptail >/dev/null 2>&1; then
+        whiptail --title "RESULTBOT  |  SETTINGS" \
+          --menu "Choose a setting below. Changes apply to future signals.
+
+Existing orders remain unchanged." \
+          19 84 6 \
+          "1" "ALERT SOURCE     Choose which Telegram groups to follow" \
+          "2" "ORDER BUDGET     Set your investment per order" \
+          "3" "TRADING SWITCH   Turn AMO on or off" \
+          "4" "OVERVIEW         View settings and order records" \
+          "0" "BACK             Return to terminal" \
+          3>&1 1>&2 2>&3
+    else
+        echo >&2
+        echo "1) Edit alert source" >&2
+        echo "2) Edit per-order budget" >&2
+        echo "3) Turn AMO YES / NO" >&2
+        echo "4) View current settings and order intents" >&2
+        echo "0) Exit" >&2
+        local choice
+        read -r -p "Select an option: " choice
+        printf '%s' "$choice"
+    fi
+}
+
+edit_source() {
+    local current wanted
+    current="$(get_setting source)"
+    echo "Current source: $current"
+    if [[ -t 0 ]] && command -v whiptail >/dev/null 2>&1; then
+        local a=OFF b=OFF c=OFF
+        [[ "$current" == "TEST" ]] && a=ON
+        [[ "$current" == "EARNINGS_PULSE" ]] && b=ON
+        [[ "$current" == "BOTH" ]] && c=ON
+        if ! wanted="$(whiptail --title "RESULTBOT  |  ALERT SOURCE" \
+            --radiolist "Selected sources can generate REAL BUY orders while AMO is ON." \
+            17 85 3 \
+            "TEST" "Owner-only authorized Test Group" "$a" \
+            "EARNINGS_PULSE" "Official Excellent Results channel" "$b" \
+            "BOTH" "Both authorized sources" "$c" \
+            3>&1 1>&2 2>&3)"; then
+            echo "Source change cancelled."
+            return
+        fi
+    else
+        echo "1) TEST only (owner Test Group)"
+        echo "2) EARNINGS_PULSE only (official live alerts)"
+        echo "3) BOTH sources"
+        local choice
+        read -r -p "Select source [1/2/3]: " choice
+        case "$choice" in
+            1) wanted=TEST ;;
+            2) wanted=EARNINGS_PULSE ;;
+            3) wanted=BOTH ;;
+            *) echo "No change.";return ;;
+        esac
+    fi
+    [[ "$wanted" == "$current" ]] && { echo "Source already $current.";return; }
+    if ! confirm "Change source from $current to $wanted? If AMO is ON, future eligible alerts from the newly selected source(s) may immediately place REAL Dhan orders. Existing orders will not be cancelled."; then
+        echo "Source unchanged."
+        return
+    fi
+    # A real order may become RESERVED/PREPARING/SUBMITTING between the
+    # confirmation and the actual write; handle that safely without exiting.
+    local outcome
+    if ! outcome="$("$PY" "$BOT" settings --source "$wanted" 2>&1)"; then
+        notice "Source unchanged; edit was blocked safely. $outcome. Check menu 4 for existing order states."
+        return 0
+    fi
+    echo "$outcome"
+    echo "New source will apply to future eligible alerts. YES/NO unchanged."
+}
+
+edit_budget() {
+    local current desired outcome
+    current="$(get_setting per_order_budget_inr)"
+    echo "Saved budget: INR $current per new order"
+    echo "Enter YOUR chosen amount in whole rupees. No arbitrary budget cap."
+    if [[ -t 0 ]] && command -v whiptail >/dev/null 2>&1; then
+        if ! desired="$(whiptail --title "RESULTBOT  |  ORDER BUDGET" \
+            --inputbox "Enter your total INR budget for EACH new order. Quantity = whole shares affordable at Yahoo-based LIMIT price. Broker funds must cover actual order." \
+            13 80 "$current" 3>&1 1>&2 2>&3)"; then
+            echo "Budget unchanged."
+            return 0
+        fi
+    else
+        read -r -p "New budget per order (INR): " desired
+    fi
+    desired="${desired#"${desired%%[![:space:]]*}"}"
+    desired="${desired%"${desired##*[![:space:]]}"}"
+    if [[ ! "$desired" =~ ^[0-9]+$ ]]; then
+        notice "Enter the amount as whole rupees, e.g. 5000, without currency symbols. Budget unchanged at INR $current."
+        return 0
+    fi
+    if ! "$PY" -c 'import sys
+try:
+ n=int(sys.argv[1]); sys.exit(0 if 0<n<=2**63-1 else 1)
+except ValueError: sys.exit(1)' "$desired"; then
+        notice "Enter a positive whole-rupee amount. Budget unchanged at INR $current."
+        return 0
+    fi
+    # An unchanged budget is not an error even with leading zeros.
+    if [[ "$("$PY" -c 'import sys; print(int(sys.argv[1]))' "$desired")" == "$current" ]]; then
+        echo "Already set: INR $current per order."
+        return 0
+    fi
+    if ! confirm "Save INR $desired PER NEW ORDER? The bot will calculate whole-share quantity from a valid Yahoo-based limit price. This does not modify existing orders or change YES/NO."; then
+        echo "Budget unchanged."
+        return 0
+    fi
+    if ! outcome="$("$PY" "$BOT" settings --budget "$desired" 2>&1)"; then
+        notice "Budget unchanged. $outcome"
+        return 0
+    fi
+    echo "$outcome"
+    echo "Saved. Every FUTURE eligible signal uses the new INR $desired budget."
+}
+
+echo "======================================================"
+echo " RESULTBOT — EDIT REAL EQUITY AMO SETTINGS "
+echo "======================================================"
+echo "Settings are saved on the VM. No WebUI and no service restart."
+echo "Existing Dhan orders will not be altered or cancelled."
+while true; do
+    echo
+    "$PY" "$BOT" status-short
+    choice="$(select_menu)" || break
+    case "$choice" in
+        1) edit_source ;;
+        2) edit_budget ;;
+        3) bash "$TOGGLE" ;;
+        4) "$PY" "$BOT" settings --show
+           echo "===== EXISTING RESULTBOT-OWNED AMO ORDERS ====="
+           "$PY" "$BOT" status ;;
+        0) echo "Settings editor closed."; break ;;
+        *) echo "Invalid menu choice." ;;
+    esac
+done

@@ -1,0 +1,15 @@
+[Unit]
+Description=AuditBot daily Dhan TOTP refresh and health probe
+Wants=network-online.target time-sync.target
+After=network-online.target time-sync.target
+
+[Service]
+Type=oneshot
+User=amansingh111111111
+Group=amansingh111111111
+WorkingDirectory=/home/amansingh111111111/uditbot
+EnvironmentFile=/home/amansingh111111111/uditbot/.env
+ExecStart=/home/amansingh111111111/uditbot/bot daily_health_check
+UMask=0077
+StandardOutput=journal
+StandardError=journal

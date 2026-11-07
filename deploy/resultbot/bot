@@ -1,0 +1,69 @@
+#!/usr/bin/env bash
+set -uo pipefail
+
+D="$HOME/resultbot-data"
+PY="$HOME/uditbot/venv/bin/python"
+
+help_menu() {
+  echo
+  echo "============================================"
+  echo "          RESULTBOT COMMAND CENTER"
+  echo "============================================"
+  echo " bot status  - AMO and service status"
+  echo " bot setup   - Edit settings and YES/NO"
+  echo " bot orders  - View real AMO orders"
+  echo " bot funds   - Check live Dhan balance"
+  echo " bot menu    - Numbered command menu"
+  echo " bot logs    - Live earnings/AMO logs"
+  echo " bot help    - Show this menu"
+  echo "============================================"
+  echo
+}
+
+case "${1:-help}" in
+  status)
+    echo "===== RESULTBOT STATUS ====="
+    "$PY" "$D/equity_amo_live.py" status-short
+    echo
+    echo "Telegram listener:"
+    systemctl --user is-active \
+      resultbot-excellent-watch.service || true
+    echo "Dhan token refresh timer:"
+    systemctl --user is-active \
+      resultbot-dhan-token-refresh.timer || true
+    ;;
+
+  setup)
+    exec bash "$D/amo_settings.sh"
+    ;;
+
+  orders)
+    exec "$PY" "$D/equity_amo_live.py" status
+    ;;
+
+  funds)
+    exec "$PY" "$D/dhan_readonly.py" funds
+    ;;
+
+  menu)
+    source "$HOME/.local/share/resultbot/menu.sh"
+    menu
+    ;;
+  logs|livelogs|prevlogs|daylogs)
+    source "$HOME/.local/share/resultbot/menu.sh"
+    case "$1" in
+      logs|livelogs) livelogs ;;
+      prevlogs) prevlogs ;;
+      daylogs) daylogs ;;
+    esac
+    ;;
+  help|-h|--help)
+    help_menu
+    ;;
+
+  *)
+    echo "Unknown command: $1"
+    help_menu
+    exit 1
+    ;;
+esac
