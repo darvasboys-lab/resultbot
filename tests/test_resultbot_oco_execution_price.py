@@ -94,8 +94,8 @@ class ConfirmedFillOcoPlanTest(unittest.TestCase):
     def test_saved_oco_percentage_edit_never_enables_live_execution(self):
         with tempfile.TemporaryDirectory() as temp:
             with patch.object(ps,"FILE",Path(temp)/"plan.json"):
-                saved=ps.set_oco_percentages(3.0,6.0)
-                self.assertEqual(saved["stop_pct"],3.0)
+                saved=ps.set_oco_percentages(9.0,6.0)
+                self.assertEqual(saved["stop_pct"],9.0)
                 self.assertEqual(saved["target_pct"],6.0)
                 self.assertFalse(saved["execution_enabled"])
                 self.assertEqual(saved["execution_status"],
