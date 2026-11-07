@@ -150,7 +150,11 @@ def render(win, state, page, entries, selection, focus, note="", amount="", plan
               "─" * (width - 6), 8, width - 6)
     draw_text(win, top + (9 if compact else 12), left + 3,
               "CONFIGURATION MENU" if page == "CONTROL CENTER" else page, 2, width - 6)
+    if page == "CONTROL CENTER":
+        summary = "PLAN: {} / {}  [TEST]".format(plan.get("down_mode", "?"), plan.get("up_mode", "?"))
+        draw_text(win, top + (9 if compact else 12), left + 25, summary, 8, width - 28)
     row_start = top + (10 if compact else 14)
+    row_step = 1 if compact else 2
     if page == "ORDER BUDGET":
         draw_text(win, row_start, left + 5,
                   "Enter the investment amount for EACH new order:", 2)
@@ -169,12 +173,16 @@ def render(win, state, page, entries, selection, focus, note="", amount="", plan
         draw_text(win, row_start + 5, left + 5,
                   "Existing broker orders are not cancelled by switching OFF.", 8)
     else:
-        for i, (code, label, description) in enumerate(entries[:5]):
-            row_y = row_start + 2 * i
+        for i, (code, label, description) in enumerate(entries[:6]):
+            row_y = row_start + row_step * i
             selected = 5 if i == selection and focus == 0 else 2
             line(win, row_y, left + 3, width - 6, selected)
-            if page == "ALERT SOURCE":
-                marker = "◉" if label == state.get("source") else "○"
+            selected_value = (state.get("source") if page == "ALERT SOURCE"
+                              else plan.get("down_mode") if page == "STRATEGY DOWN"
+                              else plan.get("up_mode") if page == "STRATEGY UP"
+                              else None)
+            if selected_value is not None:
+                marker = "◉" if label == selected_value else "○"
                 code = marker + " " + code
             draw_text(win, row_y, left + 5, str(code), selected, 7)
             draw_text(win, row_y, left + 12, label, selected, 27)
@@ -279,6 +287,9 @@ def start(win):
     fresh_amount = True
     overview_offset = 0
     while True:
+        plan, plan_error = strategy_backend("settings-json")
+        if plan_error:
+            plan = {"down_mode": "UNAVAILABLE", "up_mode": "UNAVAILABLE"}
         saved, error = backend("settings", "--show")
         if error:
             note = "SETTINGS UNAVAILABLE: " + error
@@ -287,6 +298,7 @@ def start(win):
             descriptions = [
                 str(saved.get("source", "UNKNOWN")),
                 "INR {} / order".format(saved.get("per_order_budget_inr", "?")),
+                "{} / {} (TEST)".format(plan.get("down_mode", "?"), plan.get("up_mode", "?")),
                 "AMO ON" if saved.get("amo_enabled") else "AMO OFF",
                 "View existing orders",
                 "Exit",
@@ -315,7 +327,7 @@ def start(win):
                 entries = [("--", "NO ORDER RECORDS", status_error or "No existing orders")]
             selection = -1
         visible = render(win, saved, page, entries, selection,
-                         focus, note, amount)
+                         focus, note, amount, plan)
         key = win.getch()
         if key == curses.KEY_MOUSE:
             try:
