@@ -1,0 +1,66 @@
+"""Offline tests for ResultBot visual status; no broker orders or data writes."""
+import unittest
+from unittest.mock import patch
+from types import SimpleNamespace
+
+from resultbot import control_center_v2 as ui
+
+
+class TestResultBotStatusPolish(unittest.TestCase):
+    def test_red_amo_off_and_green_amo_on(self):
+        self.assertEqual(ui.amo_status_indicator(False), ("● AMO OFF", 7))
+        self.assertEqual(ui.amo_status_indicator(True), ("● AMO ON", 6))
+        self.assertEqual(ui.amo_status_indicator(None), ("● AMO UNKNOWN", 4))
+
+    def test_green_live_only_when_armed_and_listener_running(self):
+        self.assertEqual(ui.bot_status_indicator(True, True), ("BOT LIVE (AMO)", 12))
+        self.assertEqual(ui.bot_status_indicator(False, True), ("BOT LISTENING", 3))
+        self.assertEqual(ui.bot_status_indicator(None, True), ("BOT LISTENING", 3))
+        self.assertEqual(ui.bot_status_indicator(True, False), ("BOT OFFLINE", 13))
+        self.assertEqual(ui.bot_status_indicator(True, None), ("BOT STATUS ?", 3))
+        self.assertEqual(ui.bot_status_indicator(False, None), ("BOT STATUS ?", 3))
+
+    def test_listener_status_reads_only_systemctl(self):
+        with patch.object(ui.subprocess, "run", return_value=SimpleNamespace(
+            returncode=0, stdout="active\n"
+        )) as command:
+            self.assertIs(ui.is_listener_running(), True)
+            args,kwargs=command.call_args
+            self.assertEqual(args[0],
+                ["systemctl","--user","is-active","resultbot-excellent-watch.service"])
+            self.assertEqual(kwargs["timeout"],3)
+
+    def test_listener_offline_or_unavailable(self):
+        for result,expected in (
+            (SimpleNamespace(returncode=3,stdout="inactive\n"),False),
+            (SimpleNamespace(returncode=1,stdout="failed\n"),False),
+            (SimpleNamespace(returncode=1,stdout="unknown\n"),None)
+        ):
+            with self.subTest(result=result.stdout):
+                with patch.object(ui.subprocess, "run", return_value=result):
+                    self.assertIs(ui.is_listener_running(),expected)
+        with patch.object(ui.subprocess,"run",side_effect=OSError):
+            self.assertIsNone(ui.is_listener_running())
+
+    def test_arrows_in_strategy_menu_source(self):
+        from inspect import getsource
+        code=getsource(ui.start)
+        self.assertIn("▼ FALLING PRICE",code)
+        self.assertIn("▲ RISING PRICE",code)
+
+    def test_existing_menu_and_mouse_targets_remain_unchanged(self):
+        self.assertEqual(len(ui.MENU),6)
+        h,w=32,100
+        top=(h-29)//2
+        self.assertEqual(ui.mouse_hit_test("STRATEGY",h,w,18,top+14),
+                         ("item",0))
+        self.assertEqual(ui.mouse_hit_test("STRATEGY",h,w,18,top+16),
+                         ("item",1))
+        self.assertEqual(ui.mouse_hit_test("STRATEGY",h,w,18,top+22),
+                         ("item",4))
+        self.assertEqual(ui.mouse_hit_test("BUY BUFFER",h,w,18,top+22),
+                         ("item",4))
+
+
+if __name__=="__main__":
+    unittest.main()
