@@ -6,7 +6,7 @@ umask 077
 DIR="$HOME/resultbot-data"
 PY="$HOME/uditbot/venv/bin/python"
 TARGET="$DIR/control_center_v2.py"
-SOURCE="https://raw.githubusercontent.com/darvasboys-lab/resultbot/2db8f9ed60220ceb8d86383b7b1af1d722a7a149/resultbot/control_center_v2.py"
+SOURCE="https://raw.githubusercontent.com/darvasboys-lab/resultbot/aad322e21ff5d2c56cec4a75b8daf9742fd84b4a/resultbot/control_center_v2.py"
 
 if [[ ! -x "$PY" || ! -f "$TARGET" || -L "$TARGET" ]]; then
   echo "ERROR: Existing premium ResultBot Control Center not found. No changes." >&2
@@ -38,11 +38,24 @@ spec.loader.exec_module(ui)
 assert ui.amo_status_indicator(False)==("● AMO OFF",7)
 assert ui.amo_status_indicator(True)==("● AMO ON",6)
 assert ui.bot_status_indicator(True,True)==("BOT LIVE (AMO)",12)
-assert ui.bot_status_indicator(False,True)==("BOT LISTENING",3)
+assert ui.bot_status_indicator(False,True)==("BOT LISTENING",12)
 assert ui.bot_status_indicator(True,False)==("BOT OFFLINE",13)
 assert ui.mouse_hit_test("STRATEGY",32,100,18,15)==("item",0)
 assert ui.mouse_hit_test("STRATEGY",32,100,18,17)==("item",1)
-print("PASS: red AMO OFF, green live AMO status, arrows and mouse rows")
+from unittest.mock import MagicMock,patch
+screen=MagicMock()
+screen.getmaxyx.return_value=(32,100)
+with patch.object(ui,"draw_text") as drawing, patch.object(ui,"card") as cards, \
+     patch.object(ui,"line"),patch.object(ui.curses,"color_pair",return_value=0):
+    assert ui.render(screen,{"amo_enabled":False,"per_order_budget_inr":1000},
+                     "CONTROL CENTER",[],0,0,listener_running=True)
+assert any(x.args[2]=="BOT LISTENING" and x.args[3]==12
+           for x in drawing.call_args_list)
+assert any(x.args[2]=="💵" and x.args[3]==14
+           for x in drawing.call_args_list)
+assert any(x.args[3]=="TRADING AMO" and x.args[4]=="● AMO OFF"
+           for x in cards.call_args_list)
+print("PASS: bright-green BOT LISTENING, red AMO OFF, green cash icon and mouse rows")
 CHECK
 
 STAMP="$(date +%Y%m%d-%H%M%S)"
@@ -54,5 +67,7 @@ echo "SUCCESS: Visual status patch installed. Run: bot setup"
 echo "Backup: $BACKUP"
 echo "Restore: cp -p '$BACKUP' '$TARGET'"
 echo "Arrows: ▼ FALLING PRICE / ▲ RISING PRICE"
-echo "Red dot: AMO OFF | Green dot: BOT LIVE (AMO) only if armed and listening"
+echo "Red dot: AMO OFF | Bright green: BOT LISTENING when listener active"
+echo "Green cash icon: PER ORDER 💵 ₹1,000 (reflects your actual saved budget)"
+echo "Green BOT LIVE (AMO) only when AMO is armed and listener active"
 echo "No service restart, saved-setting modification or Dhan broker order."
