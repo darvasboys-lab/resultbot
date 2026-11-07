@@ -43,7 +43,7 @@ class TestIntradayBuyBuffer(unittest.TestCase):
     def test_buffer_and_share_budget_example(self):
         p=plan.calculate_buy_limit(quote_price="100",budget_inr=1000,
                                    tick_size="0.05",buffer_pct=2)
-        self.assertEqual(p["buy_limit_price"],"102")
+        self.assertEqual(p["buy_limit_price"],"102.00")
         self.assertEqual(p["whole_shares_affordable_at_limit"],9)
         self.assertEqual(p["maximum_entry_notional_inr"],"918")
         self.assertEqual(p["product_type"],"INTRADAY")
@@ -62,7 +62,7 @@ class TestIntradayBuyBuffer(unittest.TestCase):
         p=plan.calculate_buy_limit(quote_price=100,budget_inr=500,
                                    tick_size="0.05")
         self.assertEqual(p["buy_buffer_pct"],"3")
-        self.assertEqual(p["buy_limit_price"],"103")
+        self.assertEqual(p["buy_limit_price"],"103.00")
         self.assertEqual(p["whole_shares_affordable_at_limit"],4)
 
     def test_unaffordable_stock_no_buy_suggested(self):
