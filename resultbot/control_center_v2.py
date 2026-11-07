@@ -500,8 +500,8 @@ def start(win):
             elif key == 27: page = "CONTROL CENTER"; index = 2; focus = 0
         elif page in ("STRATEGY DOWN", "STRATEGY UP"):
             modes = DOWN_MODES if page == "STRATEGY DOWN" else UP_MODES
-            side = "--down" if page == "STRATEGY DOWN" else "--up"
-            return_index = 0 if page == "STRATEGY DOWN" else 1
+            side = "down" if page == "STRATEGY DOWN" else "up"
+            return_index = 0 if side == "down" else 1
             if key == curses.KEY_UP: index = (index - 1) % len(modes); focus = 0
             elif key == curses.KEY_DOWN: index = (index + 1) % len(modes); focus = 0
             elif key == 9: focus = (focus + 1) % 3
@@ -510,13 +510,64 @@ def start(win):
                 if focus == 2:
                     page = "STRATEGY"; index = return_index; focus = 0
                 else:
-                    value = modes[index][0]
-                    _, problem = strategy_backend("choose", side, value)
-                    note = "PLAN NOT SAVED: " + problem if problem else (
-                        "Saved {}: {} (TEST ONLY)".format(
-                            "downside" if side == "--down" else "upside", value))
-                    page = "STRATEGY"; index = return_index; focus = 0
+                    wizard = stage_flow.begin(plan, side, modes[index][0])
+                    wizard["fresh"] = True
+                    page = "STRATEGY WIZARD"
+                    focus = 0
             elif key == 27: page = "STRATEGY"; index = return_index; focus = 0
+        elif page == "STRATEGY WIZARD":
+            if key == 27 or (key in ENTER and focus == 2):
+                page = "STRATEGY"
+                index = 0 if wizard["side"]=="down" else 1
+                wizard = None
+                focus = 0
+            elif key == 9:
+                focus = (focus+1)%3
+            elif key == curses.KEY_BTAB:
+                focus = (focus-1)%3
+            elif 48 <= key <= 57 or key == ord("."):
+                char = chr(key)
+                if char != "." or "." not in wizard["input"] or wizard.get("fresh"):
+                    wizard["input"] = char if wizard.get("fresh") else wizard["input"]+char
+                    wizard["fresh"] = False
+                    wizard["input"] = wizard["input"][:19]
+                    focus = 0
+            elif key in (8, 127, curses.KEY_BACKSPACE):
+                wizard["input"]=wizard["input"][:-1]
+                wizard["fresh"]=False
+                focus=0
+            elif key in ENTER:
+                try:
+                    completed = stage_flow.advance(wizard, wizard["input"])
+                    wizard["fresh"] = True
+                    focus = 0
+                    if completed:
+                        page = "STRATEGY CONFIRM"
+                except ValueError as exc:
+                    note = "INVALID: "+str(exc)
+        elif page == "STRATEGY CONFIRM":
+            if key == 27 or (key in ENTER and focus == 2) or key in (ord("n"),ord("N")):
+                page = "STRATEGY"
+                index = 0 if wizard["side"]=="down" else 1
+                wizard = None
+                focus = 0
+            elif key == 9:
+                focus=(focus+1)%3
+            elif key == curses.KEY_BTAB:
+                focus=(focus-1)%3
+            elif key in ENTER or key in (ord("y"),ord("Y")):
+                data = stage_flow.request(wizard)
+                _, problem = strategy_backend("apply-side-json",
+                                              json.dumps(data,separators=(",",":")))
+                if problem:
+                    note = "PLAN NOT SAVED: " + problem
+                else:
+                    note = "Saved {} {} plan (TEST only)".format(
+                        data["side"],data["mode"])
+                    page = "STRATEGY"
+                    index = 0 if wizard["side"]=="down" else 1
+                    wizard = None
+                    focus = 0
         elif page == "STRATEGY REVIEW":
             if key in ENTER or key == 27:
                 page = "STRATEGY"; index = 2; focus = 0
