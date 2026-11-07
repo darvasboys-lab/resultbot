@@ -49,11 +49,11 @@ with patch.object(ui,"draw_text") as drawing, patch.object(ui,"card") as cards, 
      patch.object(ui,"line"),patch.object(ui.curses,"color_pair",return_value=0):
     assert ui.render(screen,{"amo_enabled":False,"per_order_budget_inr":1000},
                      "CONTROL CENTER",[],0,0,listener_running=True)
-assert any(x.args[2]=="BOT LISTENING" and x.args[3]==12
+assert any(x.args[3]=="BOT LISTENING" and x.args[4]==12
            for x in drawing.call_args_list)
-assert any(x.args[2]=="💵" and x.args[3]==14
+assert any(x.args[3]=="💵" and x.args[4]==14
            for x in drawing.call_args_list)
-assert any(x.args[3]=="TRADING AMO" and x.args[4]=="● AMO OFF"
+assert any(x.args[4]=="TRADING AMO" and x.args[5]=="● AMO OFF"
            for x in cards.call_args_list)
 print("PASS: bright-green BOT LISTENING, red AMO OFF, green cash icon and mouse rows")
 CHECK
