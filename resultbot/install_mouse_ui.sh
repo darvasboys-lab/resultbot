@@ -7,7 +7,7 @@ D="$HOME/resultbot-data"
 PY="$HOME/uditbot/venv/bin/python"
 TARGET="$D/control_center_v2.py"
 LAUNCH="$D/amo_settings.sh"
-SOURCE="https://raw.githubusercontent.com/darvasboys-lab/resultbot/b283ff1d289b39e61ebddb6060b6ba9d2e05a98b/resultbot/control_center_v2.py"
+SOURCE="https://raw.githubusercontent.com/darvasboys-lab/resultbot/5d63b41b566b2db12c4979c3ed4a0cbf296a559e/resultbot/control_center_v2.py"
 
 if [[ ! -x "$PY" || ! -f "$D/equity_amo_live.py" ]]; then
   echo "ERROR: ResultBot backend not found; nothing changed." >&2
