@@ -114,7 +114,7 @@ class TestBreadcrumbAndDirectionVisuals(unittest.TestCase):
     def test_256_color_palette_sets_4_distinct_arrow_pairs(self):
         with patch.object(ui.curses,"start_color"), \
              patch.object(ui.curses,"init_pair") as init, \
-             patch.object(ui.curses,"COLORS",256):
+             patch.object(ui.curses,"COLORS",256,create=True):
             ui.colors()
         mapping={c.args[0]:c.args[1:] for c in init.call_args_list}
         self.assertEqual(len(mapping),18)
