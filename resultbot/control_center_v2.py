@@ -344,11 +344,11 @@ def mouse_hit_test(page, height, width, x, y):
                 if card_x <= x < card_x + card_width:
                     return "item", target
 
-    if page in ("CONTROL CENTER", "ALERT SOURCE", "STRATEGY",
+    if page in ("CONTROL CENTER", "ALERT SOURCE", "STRATEGY", "BUY BUFFER",
                 "STRATEGY DOWN", "STRATEGY UP", "STRATEGY REVIEW"):
         row_start = top + (10 if compact else 14)
         count = (len(MENU) if page == "CONTROL CENTER" else
-                 5 if page == "STRATEGY" else
+                 6 if page in ("STRATEGY", "BUY BUFFER") else
                  5 if page == "STRATEGY REVIEW" else 3)
         step = 1 if compact else 2
         if left + 3 <= x < left + panel_width - 3:
@@ -356,7 +356,7 @@ def mouse_hit_test(page, height, width, x, y):
                 if y == row_start + step * i:
                     return "item", i
 
-    if page in ("ORDER BUDGET","STRATEGY WIZARD","OCO EDIT"):
+    if page in ("ORDER BUDGET","STRATEGY WIZARD","OCO EDIT","BUFFER CUSTOM"):
         row_start = top + (10 if compact else 14)
         field_y=row_start + (2 if page=="ORDER BUDGET" else 4)
         if y == field_y and left + 5 <= x < left + min(50,panel_width-7):
@@ -389,7 +389,11 @@ def start(win):
     overview_offset = 0
     wizard = None
     oco_editor = None
+    buy_input = ""
+    buy_fresh = True
     while True:
+        buy_cfg, buy_error = intraday_backend("settings-json")
+        if buy_error: buy_cfg = {"buy_buffer_pct":"UNAVAILABLE"}
         plan, plan_error = strategy_backend("settings-json")
         if plan_error:
             plan = {"down_mode": "UNAVAILABLE", "up_mode": "UNAVAILABLE"}
@@ -422,9 +426,23 @@ def start(win):
                 ("02", "RISING PRICE", str(plan.get("up_mode", "Unavailable"))),
                 ("03", "REVIEW PLAN", "View saved strategy stages"),
                 ("04", "OCO SETTINGS", "SL/TP from Dhan executed price"),
+                ("05", "BUY BUFFER", "{}% | intraday LIMIT plan only".format(
+                    buy_cfg.get("buy_buffer_pct", "?"))),
                 ("00", "BACK", "Return to main menu"),
             ]
             selection = index
+        elif page == "BUY BUFFER":
+            entries = [(str(i+1).zfill(2),label,
+                        "Current: {}% | config only".format(
+                            buy_cfg.get("buy_buffer_pct", "?")) if i==0
+                        else "Select and save" if i<4 else
+                        "Enter a different percent" if i==4 else
+                        "Return to Strategy Plan")
+                       for i, (code,label) in enumerate(BUFFER_CHOICES)]
+            selection = index
+        elif page == "BUFFER CUSTOM":
+            entries = []
+            selection = -1
         elif page == "STRATEGY DOWN":
             entries = [(str(i+1).zfill(2), code, desc)
                        for i, (code, desc) in enumerate(DOWN_MODES)]
@@ -462,7 +480,7 @@ def start(win):
                 entries = [("--", "NO ORDER RECORDS", status_error or "No existing orders")]
             selection = -1
         visible = render(win, saved, page, entries, selection,
-                         focus, note, amount, plan, wizard, oco_editor)
+                         focus, note, amount, plan, wizard, oco_editor, buy_cfg, buy_input)
         key = win.getch()
         if key == curses.KEY_MOUSE:
             try:
