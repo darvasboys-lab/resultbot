@@ -249,8 +249,9 @@ def render(win, state, page, entries, selection, focus, note="", amount="", plan
         line(win, row, left, width, 2)
     for row in range(top, top + (2 if compact else 3)):
         line(win, row, left, width, 3)
-    path = breadcrumb_text(page, wizard, oco_editor, max_chars=width - 25)
-    draw_text(win, top + 1, left + 3, "▣ " + path, 3, width - 25)
+    header_limit = width - 25
+    path = breadcrumb_text(page, wizard, oco_editor, max_chars=header_limit - 2)
+    draw_text(win, top + 1, left + 3, "▣ " + path, 3, header_limit)
     live_label, dot_style = bot_status_indicator(state.get("amo_enabled"), listener_running)
     status_x = left + width - 19
     draw_text(win, top + 1, status_x, "●", dot_style, 1)
