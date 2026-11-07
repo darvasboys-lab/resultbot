@@ -30,6 +30,11 @@ SOURCES = [
 DOWN_MODES = [("CUT", "Cut losses in stages"), ("AVERAGE", "Average down with shares"), ("STOP_ONLY", "Hold until final stop")]
 UP_MODES = [("TAKE_PROFIT", "Book profits in stages"), ("ADD_UP", "Add as price rises"), ("TARGET_ONLY", "Hold until final target")]
 STRATEGY_BACKEND = ROOT / "position_strategy.py"
+INTRADAY_BACKEND = ROOT / "intraday_buy_plan.py"
+BUFFER_CHOICES = [("1%", "1% Buy Buffer"), ("2%", "2% Buy Buffer"),
+                  ("3%", "3% Buy Buffer"), ("4%", "4% Buy Buffer"),
+                  ("CUSTOM", "Custom percentage"), ("BACK", "Back to strategy")]
+
 ENTER = (10, 13, curses.KEY_ENTER)
 
 def backend(*args):
@@ -49,6 +54,18 @@ def strategy_backend(*args):
                                 capture_output=True, text=True, timeout=10)
         if result.returncode:
             return {}, (result.stderr or result.stdout).strip() or "Plan not saved"
+        return json.loads(result.stdout), ""
+    except (OSError, ValueError, subprocess.TimeoutExpired) as exc:
+        return {}, str(exc)
+
+
+def intraday_backend(*args):
+    """Owner intraday limit-price settings ONLY, never order submission."""
+    try:
+        result = subprocess.run([str(PY), str(INTRADAY_BACKEND), *args],
+                                capture_output=True, text=True, timeout=10)
+        if result.returncode:
+            return {}, (result.stderr or result.stdout).strip() or "Buffer not saved"
         return json.loads(result.stdout), ""
     except (OSError, ValueError, subprocess.TimeoutExpired) as exc:
         return {}, str(exc)
@@ -111,8 +128,9 @@ def card(win, y, x, width, heading, value, description, value_style=4, compact=F
         draw_text(win, y + 3, x + 2, description, 4, width - 4)
 
 
-def render(win, state, page, entries, selection, focus, note="", amount="", plan=None, wizard=None, oco_editor=None):
+def render(win, state, page, entries, selection, focus, note="", amount="", plan=None, wizard=None, oco_editor=None, buy_cfg=None, buy_input=""):
     plan = plan or {}
+    buy_cfg = buy_cfg or {}
     h, w = win.getmaxyx()
     win.bkgd(" ", curses.color_pair(1))
     win.erase()
@@ -160,7 +178,19 @@ def render(win, state, page, entries, selection, focus, note="", amount="", plan
         draw_text(win, top + (9 if compact else 12), left + 25, summary, 8, width - 28)
     row_start = top + (10 if compact else 14)
     row_step = 1 if compact else 2
-    if page == "OCO EDIT" and oco_editor:
+    if page == "BUFFER CUSTOM":
+        draw_text(win, row_start, left+5,
+                  "INTRADAY BUY BUFFER — CUSTOM %", 2, width-10)
+        draw_text(win, row_start+2, left+5,
+                  "Enter your chosen BUY limit buffer percentage:", 2, width-11)
+        style = 5 if focus == 0 else 4
+        line(win,row_start+4,left+5,min(45,width-12),style)
+        draw_text(win,row_start+4,left+7,buy_input+" % ▏",style,min(40,width-16))
+        draw_text(win,row_start+6,left+5,
+                  "Buy limit = quote x (1 + buffer%). Rounded UP to tick.",8,width-11)
+        draw_text(win,row_start+7,left+5,
+                  "CONFIG ONLY: live intraday execution not connected",8,width-11)
+    elif page == "OCO EDIT" and oco_editor:
         phase=oco_editor["phase"]
         label="STOP LOSS" if phase==0 else "TARGET"
         draw_text(win, row_start, left+5,
@@ -245,7 +275,8 @@ def render(win, state, page, entries, selection, focus, note="", amount="", plan
             selected_value = (state.get("source") if page == "ALERT SOURCE"
                               else plan.get("down_mode") if page == "STRATEGY DOWN"
                               else plan.get("up_mode") if page == "STRATEGY UP"
-                              else None)
+                              else str(buy_cfg.get("buy_buffer_pct","?"))+"%"
+                                   if page == "BUY BUFFER" else None)
             if selected_value is not None:
                 marker = "◉" if label == selected_value else "○"
                 code = marker + " " + code
