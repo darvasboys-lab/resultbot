@@ -168,7 +168,7 @@ def card(win, y, x, width, heading, value, description, value_style=4, compact=F
         draw_text(win, y + 3, x + 2, description, 4, width - 4)
 
 
-def render(win, state, page, entries, selection, focus, note="", amount="", plan=None, wizard=None, oco_editor=None, buy_cfg=None, buy_input=""):
+def render(win, state, page, entries, selection, focus, note="", amount="", plan=None, wizard=None, oco_editor=None, buy_cfg=None, buy_input="", listener_running=None):
     plan = plan or {}
     buy_cfg = buy_cfg or {}
     h, w = win.getmaxyx()
@@ -190,16 +190,21 @@ def render(win, state, page, entries, selection, focus, note="", amount="", plan
     for row in range(top, top + (2 if compact else 3)):
         line(win, row, left, width, 3)
     draw_text(win, top + 1, left + 3, "▣ RESULTBOT  /  " + page, 3, width - 30)
-    draw_text(win, top + 1, left + width - 19, "● LIVE SETTINGS", 3, 17)
+    live_label, dot_style = bot_status_indicator(state.get("amo_enabled"), listener_running)
+    status_x = left + width - 19
+    draw_text(win, top + 1, status_x, "●", dot_style, 1)
+    draw_text(win, top + 1, status_x + 2, live_label, 3, 16)
 
     draw_text(win, top + (3 if compact else 4), left + 3,
               "CURRENT CONFIGURATION", 8)
     budget = state.get("per_order_budget_inr")
     amount_label = "₹{:,.0f}".format(budget) if isinstance(budget, int) else "Unavailable"
     on = state.get("amo_enabled")
+    amo_label, amo_style = amo_status_indicator(on)
+    amo_description = ("AMO entry armed" if listener_running is True
+                       else "Listener not active") if on is True else "AMO entry disabled"
     cards = (
-        ("TRADING AMO", "● ON" if on else "○ OFF" if on is False else "UNKNOWN",
-         "Trading enabled" if on else "Trading paused", 6 if on else 7 if on is False else 4),
+        ("TRADING AMO", amo_label, amo_description, amo_style),
         ("ALERT SOURCE", str(state.get("source", "UNKNOWN")), "Telegram sources", 4),
         ("PER ORDER", amount_label, "Future orders only", 4),
     )
@@ -462,8 +467,8 @@ def start(win):
             selection = -1
         elif page == "STRATEGY":
             entries = [
-                ("01", "FALLING PRICE", str(plan.get("down_mode", "Unavailable"))),
-                ("02", "RISING PRICE", str(plan.get("up_mode", "Unavailable"))),
+                ("01", "▼ FALLING PRICE", str(plan.get("down_mode", "Unavailable"))),
+                ("02", "▲ RISING PRICE", str(plan.get("up_mode", "Unavailable"))),
                 ("03", "REVIEW PLAN", "View saved strategy stages"),
                 ("04", "OCO SETTINGS", "SL/TP from Dhan executed price"),
                 ("05", "BUY BUFFER", "{}% | intraday LIMIT plan only".format(
@@ -519,8 +524,10 @@ def start(win):
             if not entries:
                 entries = [("--", "NO ORDER RECORDS", status_error or "No existing orders")]
             selection = -1
+        running = is_listener_running()
         visible = render(win, saved, page, entries, selection,
-                         focus, note, amount, plan, wizard, oco_editor, buy_cfg, buy_input)
+                         focus, note, amount, plan, wizard, oco_editor,
+                         buy_cfg, buy_input, running)
         key = win.getch()
         if key == curses.KEY_MOUSE:
             try:
