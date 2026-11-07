@@ -434,6 +434,48 @@ def start(win):
                 else:
                     note = "Enter a positive whole-rupee amount"
             elif key == 27: page = "CONTROL CENTER"; index = 1; focus = 0
+        elif page == "STRATEGY":
+            if key == curses.KEY_UP: index = (index - 1) % 4; focus = 0
+            elif key == curses.KEY_DOWN: index = (index + 1) % 4; focus = 0
+            elif key == 9: focus = (focus + 1) % 3
+            elif key == curses.KEY_BTAB: focus = (focus - 1) % 3
+            elif key in ENTER or key == 32:
+                if focus == 2 or index == 3:
+                    page = "CONTROL CENTER"; index = 2; focus = 0
+                else:
+                    page = ["STRATEGY DOWN", "STRATEGY UP", "STRATEGY REVIEW"][index]
+                    if page == "STRATEGY DOWN":
+                        index = next((i for i,(v,_) in enumerate(DOWN_MODES)
+                                      if v == plan.get("down_mode")), 0)
+                    elif page == "STRATEGY UP":
+                        index = next((i for i,(v,_) in enumerate(UP_MODES)
+                                      if v == plan.get("up_mode")), 0)
+                    else:
+                        index = 0
+                    focus = 0
+            elif key == 27: page = "CONTROL CENTER"; index = 2; focus = 0
+        elif page in ("STRATEGY DOWN", "STRATEGY UP"):
+            modes = DOWN_MODES if page == "STRATEGY DOWN" else UP_MODES
+            side = "--down" if page == "STRATEGY DOWN" else "--up"
+            return_index = 0 if page == "STRATEGY DOWN" else 1
+            if key == curses.KEY_UP: index = (index - 1) % len(modes); focus = 0
+            elif key == curses.KEY_DOWN: index = (index + 1) % len(modes); focus = 0
+            elif key == 9: focus = (focus + 1) % 3
+            elif key == curses.KEY_BTAB: focus = (focus - 1) % 3
+            elif key in ENTER or key == 32:
+                if focus == 2:
+                    page = "STRATEGY"; index = return_index; focus = 0
+                else:
+                    value = modes[index][0]
+                    _, problem = strategy_backend("choose", side, value)
+                    note = "PLAN NOT SAVED: " + problem if problem else (
+                        "Saved {}: {} (TEST ONLY)".format(
+                            "downside" if side == "--down" else "upside", value))
+                    page = "STRATEGY"; index = return_index; focus = 0
+            elif key == 27: page = "STRATEGY"; index = return_index; focus = 0
+        elif page == "STRATEGY REVIEW":
+            if key in ENTER or key == 27:
+                page = "STRATEGY"; index = 2; focus = 0
         elif page == "TRADING SWITCH":
             if key == 9: focus = (focus + 1) % 3
             elif key == curses.KEY_BTAB: focus = (focus - 1) % 3
@@ -446,14 +488,14 @@ def start(win):
                     _, problem = backend("preflight")
                     if not problem: _, problem = backend("arm")
                 note = "SWITCH FAILED: " + problem if problem else "AMO switch saved"
-                page = "CONTROL CENTER"; index = 2; focus = 0
+                page = "CONTROL CENTER"; index = 3; focus = 0
             elif key in (27, ord("n"), ord("N")):
-                page = "CONTROL CENTER"; index = 2; focus = 0
+                page = "CONTROL CENTER"; index = 3; focus = 0
         else:
             if key == curses.KEY_DOWN: overview_offset = min(max(0, len(orders) - 5), overview_offset + 1)
             elif key == curses.KEY_UP: overview_offset = max(0, overview_offset - 1)
             elif key in ENTER or key == 27:
-                page = "CONTROL CENTER"; index = 3; focus = 0
+                page = "CONTROL CENTER"; index = 4; focus = 0
 
 if __name__ == "__main__":
     curses.wrapper(start)
