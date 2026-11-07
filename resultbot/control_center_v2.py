@@ -110,7 +110,7 @@ def card(win, y, x, width, heading, value, description, value_style=4, compact=F
         draw_text(win, y + 3, x + 2, description, 4, width - 4)
 
 
-def render(win, state, page, entries, selection, focus, note="", amount="", plan=None, wizard=None):
+def render(win, state, page, entries, selection, focus, note="", amount="", plan=None, wizard=None, oco_editor=None):
     plan = plan or {}
     h, w = win.getmaxyx()
     win.bkgd(" ", curses.color_pair(1))
@@ -159,7 +159,38 @@ def render(win, state, page, entries, selection, focus, note="", amount="", plan
         draw_text(win, top + (9 if compact else 12), left + 25, summary, 8, width - 28)
     row_start = top + (10 if compact else 14)
     row_step = 1 if compact else 2
-    if page == "STRATEGY WIZARD" and wizard:
+    if page == "OCO EDIT" and oco_editor:
+        phase=oco_editor["phase"]
+        label="STOP LOSS" if phase==0 else "TARGET"
+        draw_text(win, row_start, left+5,
+                  "OCO SETTINGS — {} %  |  STEP {} OF 2".format(label,phase+1),
+                  2, width-10)
+        draw_text(win, row_start+2, left+5,
+                  "Percentage {} from confirmed first BUY executed price".format(
+                      "BELOW" if phase==0 else "ABOVE"), 2, width-11)
+        field=5 if focus==0 else 4
+        line(win,row_start+4,left+5,min(45,width-12),field)
+        draw_text(win,row_start+4,left+7,oco_editor["input"]+" % ▏",
+                  field,min(40,width-16))
+        draw_text(win,row_start+6,left+5,
+                  "Dhan averageTradedPrice, not Telegram/Yahoo/limit price",8,width-11)
+        draw_text(win,row_start+7,left+5,
+                  "Enter: next   Esc: cancel entire OCO settings draft",8,width-11)
+    elif page == "OCO CONFIRM" and oco_editor:
+        draw_text(win,row_start,left+5,"REVIEW OCO SETTINGS  |  NOT A LIVE BROKER ORDER",2,width-10)
+        draw_text(win,row_start+2,left+6,
+                  "STOP TRIGGER: -{}% from confirmed Dhan execution VWAP".format(
+                      oco_editor["stop_pct"]),2,width-12)
+        draw_text(win,row_start+4,left+6,
+                  "TARGET: +{}% from confirmed Dhan execution VWAP".format(
+                      oco_editor["target_pct"]),2,width-12)
+        draw_text(win,row_start+6,left+6,
+                  "Tick rounding calculated AFTER a verified full fill",8,width-12)
+        draw_text(win,row_start+7,left+6,
+                  "No OCO submitted; confirm broker eligibility separately",8,width-12)
+        draw_text(win,top+height-6,left+5,
+                  "OK: SAVE PERCENTAGES    Cancel: DISCARD",8,width-11)
+    elif page == "STRATEGY WIZARD" and wizard:
         q = wizard["questions"][wizard["position"]]
         step = wizard["position"]+1
         total = len(wizard["questions"])
@@ -285,7 +316,7 @@ def mouse_hit_test(page, height, width, x, y):
                 "STRATEGY DOWN", "STRATEGY UP", "STRATEGY REVIEW"):
         row_start = top + (10 if compact else 14)
         count = (len(MENU) if page == "CONTROL CENTER" else
-                 4 if page == "STRATEGY" else
+                 5 if page == "STRATEGY" else
                  5 if page == "STRATEGY REVIEW" else 3)
         step = 1 if compact else 2
         if left + 3 <= x < left + panel_width - 3:
@@ -293,7 +324,7 @@ def mouse_hit_test(page, height, width, x, y):
                 if y == row_start + step * i:
                     return "item", i
 
-    if page in ("ORDER BUDGET","STRATEGY WIZARD"):
+    if page in ("ORDER BUDGET","STRATEGY WIZARD","OCO EDIT"):
         row_start = top + (10 if compact else 14)
         field_y=row_start + (2 if page=="ORDER BUDGET" else 4)
         if y == field_y and left + 5 <= x < left + min(50,panel_width-7):
