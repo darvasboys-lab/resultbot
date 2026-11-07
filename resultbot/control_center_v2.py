@@ -275,7 +275,7 @@ def render(win, state, page, entries, selection, focus, note="", amount="", plan
             selected_value = (state.get("source") if page == "ALERT SOURCE"
                               else plan.get("down_mode") if page == "STRATEGY DOWN"
                               else plan.get("up_mode") if page == "STRATEGY UP"
-                              else str(buy_cfg.get("buy_buffer_pct","?"))+"%"
+                              else str(buy_cfg.get("buy_buffer_pct","?"))+"% Buy Buffer"
                                    if page == "BUY BUFFER" else None)
             if selected_value is not None:
                 marker = "◉" if label == selected_value else "○"
@@ -563,13 +563,21 @@ def start(win):
                     note = "Enter a positive whole-rupee amount"
             elif key == 27: page = "CONTROL CENTER"; index = 1; focus = 0
         elif page == "STRATEGY":
-            if key == curses.KEY_UP: index = (index - 1) % 5; focus = 0
-            elif key == curses.KEY_DOWN: index = (index + 1) % 5; focus = 0
+            if key == curses.KEY_UP: index = (index - 1) % 6; focus = 0
+            elif key == curses.KEY_DOWN: index = (index + 1) % 6; focus = 0
             elif key == 9: focus = (focus + 1) % 3
             elif key == curses.KEY_BTAB: focus = (focus - 1) % 3
             elif key in ENTER or key == 32:
-                if focus == 2 or index == 4:
+                if focus == 2 or index == 5:
                     page = "CONTROL CENTER"; index = 2; focus = 0
+                elif index == 4:
+                    if buy_error:
+                        note = "BUFFER SETTINGS UNAVAILABLE: "+buy_error
+                    else:
+                        page = "BUY BUFFER"
+                        index = next((i for i,(code,_) in enumerate(BUFFER_CHOICES[:4])
+                                      if code == str(buy_cfg.get("buy_buffer_pct"))+"%"), 0)
+                        focus = 0
                 elif index == 3:
                     if plan_error:
                         note = "OCO SETTINGS UNAVAILABLE: " + plan_error
@@ -595,6 +603,57 @@ def start(win):
                         index = 0
                     focus = 0
             elif key == 27: page = "CONTROL CENTER"; index = 2; focus = 0
+        elif page == "BUY BUFFER":
+            if key == curses.KEY_UP: index = (index - 1) % len(BUFFER_CHOICES); focus = 0
+            elif key == curses.KEY_DOWN: index = (index + 1) % len(BUFFER_CHOICES); focus = 0
+            elif key == 9: focus = (focus + 1) % 3
+            elif key == curses.KEY_BTAB: focus = (focus - 1) % 3
+            elif key in ENTER or key == 32:
+                if focus == 2 or index == 5:
+                    page = "STRATEGY"; index = 4; focus = 0
+                elif index == 4:
+                    buy_input = str(buy_cfg.get("buy_buffer_pct", "1"))
+                    buy_fresh = True
+                    page = "BUFFER CUSTOM"
+                    focus = 0
+                else:
+                    value = BUFFER_CHOICES[index][0].rstrip("%")
+                    _, problem = intraday_backend("set-buffer", value)
+                    note = "BUY BUFFER NOT SAVED: " + problem if problem else (
+                        "Saved intraday BUY limit buffer: " + value + "% (not yet live)")
+                    page = "STRATEGY"; index = 4; focus = 0
+            elif key == 27: page = "STRATEGY"; index = 4; focus = 0
+        elif page == "BUFFER CUSTOM":
+            if key == 27 or (key in ENTER and focus == 2):
+                page = "BUY BUFFER"; index = 4; focus = 0
+            elif key == 9: focus = (focus + 1) % 3
+            elif key == curses.KEY_BTAB: focus = (focus - 1) % 3
+            elif 48 <= key <= 57 or key == ord("."):
+                char = chr(key)
+                if char != "." or "." not in buy_input or buy_fresh:
+                    buy_input = char if buy_fresh else buy_input+char
+                    buy_input = buy_input[:19]
+                    buy_fresh = False
+                    focus = 0
+            elif key in (8,127,curses.KEY_BACKSPACE):
+                buy_input = buy_input[:-1]
+                buy_fresh = False
+                focus = 0
+            elif key in ENTER:
+                try:
+                    value = float(buy_input)
+                    if not math.isfinite(value) or not 0 <= value < 100:
+                        raise ValueError("Use a percent from 0 (no buffer) to below 100")
+                    _, problem = intraday_backend("set-buffer", buy_input)
+                    if problem:
+                        note = "BUY BUFFER NOT SAVED: " + problem
+                    else:
+                        note = "Saved intraday BUY limit buffer: "+buy_input+"% (not yet live)"
+                        page = "STRATEGY"
+                        index = 4
+                        focus = 0
+                except ValueError as exc:
+                    note = "INVALID BUY BUFFER: "+str(exc)
         elif page in ("STRATEGY DOWN", "STRATEGY UP"):
             modes = DOWN_MODES if page == "STRATEGY DOWN" else UP_MODES
             side = "down" if page == "STRATEGY DOWN" else "up"
