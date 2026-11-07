@@ -71,6 +71,43 @@ def intraday_backend(*args):
         return {}, str(exc)
 
 
+
+def is_listener_running():
+    """Only read the ResultBot listener's real systemd state."""
+    try:
+        result = subprocess.run(
+            ["systemctl", "--user", "is-active", "resultbot-excellent-watch.service"],
+            capture_output=True, text=True, timeout=3
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    observed = result.stdout.strip()
+    if result.returncode == 0 and observed == "active":
+        return True
+    if observed in ("inactive", "failed", "deactivating"):
+        return False
+    return None
+
+
+def bot_status_indicator(amo_enabled, listener_running):
+    """Green LIVE only when the ResultBot AMO execution gate is armed and running."""
+    if amo_enabled is True and listener_running is True:
+        return "BOT LIVE (AMO)", 12
+    if listener_running is True:
+        return "BOT LISTENING", 12
+    if listener_running is False:
+        return "BOT OFFLINE", 13
+    return "BOT STATUS ?", 3
+
+
+def amo_status_indicator(amo_enabled):
+    if amo_enabled is True:
+        return "● AMO ON", 6
+    if amo_enabled is False:
+        return "● AMO OFF", 7
+    return "● AMO UNKNOWN", 4
+
+
 def colors():
     """Blue background, soft-grey dashboard, white cards and yellow focus."""
     curses.start_color()
@@ -79,6 +116,8 @@ def colors():
             (255, 18), (236, 253), (255, 24), (238, 255),
             (235, 221), (28, 255), (160, 255), (241, 253),
             (246, 255), (238, 251), (236, 255),
+            (46, 24), (196, 24),  # green/red status on blue
+            (34, 255),  # green banknote icon on white card
         ]
     else:
         scheme = [
@@ -93,6 +132,9 @@ def colors():
             (curses.COLOR_BLACK, curses.COLOR_WHITE),
             (curses.COLOR_BLACK, curses.COLOR_WHITE),
             (curses.COLOR_BLACK, curses.COLOR_WHITE),
+            (curses.COLOR_GREEN, curses.COLOR_BLUE),
+            (curses.COLOR_RED, curses.COLOR_BLUE),
+            (curses.COLOR_GREEN, curses.COLOR_WHITE),
         ]
     for num, pair in enumerate(scheme, 1):
         curses.init_pair(num, *pair)
@@ -128,7 +170,7 @@ def card(win, y, x, width, heading, value, description, value_style=4, compact=F
         draw_text(win, y + 3, x + 2, description, 4, width - 4)
 
 
-def render(win, state, page, entries, selection, focus, note="", amount="", plan=None, wizard=None, oco_editor=None, buy_cfg=None, buy_input=""):
+def render(win, state, page, entries, selection, focus, note="", amount="", plan=None, wizard=None, oco_editor=None, buy_cfg=None, buy_input="", listener_running=None):
     plan = plan or {}
     buy_cfg = buy_cfg or {}
     h, w = win.getmaxyx()
@@ -150,24 +192,35 @@ def render(win, state, page, entries, selection, focus, note="", amount="", plan
     for row in range(top, top + (2 if compact else 3)):
         line(win, row, left, width, 3)
     draw_text(win, top + 1, left + 3, "▣ RESULTBOT  /  " + page, 3, width - 30)
-    draw_text(win, top + 1, left + width - 19, "● LIVE SETTINGS", 3, 17)
+    live_label, dot_style = bot_status_indicator(state.get("amo_enabled"), listener_running)
+    status_x = left + width - 19
+    draw_text(win, top + 1, status_x, "●", dot_style, 1)
+    draw_text(win, top + 1, status_x + 2, live_label,
+              dot_style if listener_running is True else 3, 16)
 
     draw_text(win, top + (3 if compact else 4), left + 3,
               "CURRENT CONFIGURATION", 8)
     budget = state.get("per_order_budget_inr")
     amount_label = "₹{:,.0f}".format(budget) if isinstance(budget, int) else "Unavailable"
+    # Leave room for a two-cell green cash emoji in the PER ORDER card.
+    money_value = "   " + amount_label if isinstance(budget, int) else amount_label
     on = state.get("amo_enabled")
+    amo_label, amo_style = amo_status_indicator(on)
+    amo_description = ("AMO entry armed" if listener_running is True
+                       else "Listener not active") if on is True else "AMO entry disabled"
     cards = (
-        ("TRADING AMO", "● ON" if on else "○ OFF" if on is False else "UNKNOWN",
-         "Trading enabled" if on else "Trading paused", 6 if on else 7 if on is False else 4),
+        ("TRADING AMO", amo_label, amo_description, amo_style),
         ("ALERT SOURCE", str(state.get("source", "UNKNOWN")), "Telegram sources", 4),
-        ("PER ORDER", amount_label, "Future orders only", 4),
+        ("PER ORDER", money_value, "Future orders only", 4),
     )
     card_width = (width - 10) // 3
     for i, props in enumerate(cards):
-        card(win, top + (4 if compact else 5),
-             left + 3 + i * (card_width + 2), card_width,
+        card_top = top + (4 if compact else 5)
+        card_left = left + 3 + i * (card_width + 2)
+        card(win, card_top, card_left, card_width,
              *props, compact=compact)
+        if i == 2 and isinstance(budget, int):
+            draw_text(win, card_top + 2, card_left + 2, "💵", 14, 2)
 
     draw_text(win, top + (8 if compact else 11), left + 3,
               "─" * (width - 6), 8, width - 6)
@@ -422,8 +475,8 @@ def start(win):
             selection = -1
         elif page == "STRATEGY":
             entries = [
-                ("01", "FALLING PRICE", str(plan.get("down_mode", "Unavailable"))),
-                ("02", "RISING PRICE", str(plan.get("up_mode", "Unavailable"))),
+                ("01", "▼ FALLING PRICE", str(plan.get("down_mode", "Unavailable"))),
+                ("02", "▲ RISING PRICE", str(plan.get("up_mode", "Unavailable"))),
                 ("03", "REVIEW PLAN", "View saved strategy stages"),
                 ("04", "OCO SETTINGS", "SL/TP from Dhan executed price"),
                 ("05", "BUY BUFFER", "{}% | intraday LIMIT plan only".format(
@@ -479,8 +532,10 @@ def start(win):
             if not entries:
                 entries = [("--", "NO ORDER RECORDS", status_error or "No existing orders")]
             selection = -1
+        running = is_listener_running()
         visible = render(win, saved, page, entries, selection,
-                         focus, note, amount, plan, wizard, oco_editor, buy_cfg, buy_input)
+                         focus, note, amount, plan, wizard, oco_editor,
+                         buy_cfg, buy_input, running)
         key = win.getch()
         if key == curses.KEY_MOUSE:
             try:
