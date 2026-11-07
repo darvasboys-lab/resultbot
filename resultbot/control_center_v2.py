@@ -243,17 +243,21 @@ def mouse_hit_test(page, height, width, x, y):
         card_h = 4 if compact else 5
         card_width = (panel_width - 10) // 3
         if card_y <= y < card_y + card_h:
-            for i, target in enumerate((2, 0, 1)):
+            for i, target in enumerate((3, 0, 1)):
                 card_x = left + 3 + i * (card_width + 2)
                 if card_x <= x < card_x + card_width:
                     return "item", target
 
-    if page in ("CONTROL CENTER", "ALERT SOURCE"):
+    if page in ("CONTROL CENTER", "ALERT SOURCE", "STRATEGY",
+                "STRATEGY DOWN", "STRATEGY UP", "STRATEGY REVIEW"):
         row_start = top + (10 if compact else 14)
-        count = 5 if page == "CONTROL CENTER" else 3
+        count = (len(MENU) if page == "CONTROL CENTER" else
+                 4 if page == "STRATEGY" else
+                 5 if page == "STRATEGY REVIEW" else 3)
+        step = 1 if compact else 2
         if left + 3 <= x < left + panel_width - 3:
             for i in range(count):
-                if y == row_start + 2 * i:
+                if y == row_start + step * i:
                     return "item", i
 
     if page == "ORDER BUDGET":
