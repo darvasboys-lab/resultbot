@@ -71,6 +71,43 @@ def intraday_backend(*args):
         return {}, str(exc)
 
 
+
+def is_listener_running():
+    """Only read the ResultBot listener's real systemd state."""
+    try:
+        result = subprocess.run(
+            ["systemctl", "--user", "is-active", "resultbot-excellent-watch.service"],
+            capture_output=True, text=True, timeout=3
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    observed = result.stdout.strip()
+    if result.returncode == 0 and observed == "active":
+        return True
+    if observed in ("inactive", "failed", "deactivating"):
+        return False
+    return None
+
+
+def bot_status_indicator(amo_enabled, listener_running):
+    """Green LIVE only when the ResultBot AMO execution gate is armed and running."""
+    if amo_enabled is True and listener_running is True:
+        return "BOT LIVE (AMO)", 12
+    if listener_running is True:
+        return "BOT LISTENING", 3
+    if listener_running is False:
+        return "BOT OFFLINE", 13
+    return "BOT STATUS ?", 3
+
+
+def amo_status_indicator(amo_enabled):
+    if amo_enabled is True:
+        return "● AMO ON", 6
+    if amo_enabled is False:
+        return "● AMO OFF", 7
+    return "● AMO UNKNOWN", 4
+
+
 def colors():
     """Blue background, soft-grey dashboard, white cards and yellow focus."""
     curses.start_color()
@@ -79,6 +116,7 @@ def colors():
             (255, 18), (236, 253), (255, 24), (238, 255),
             (235, 221), (28, 255), (160, 255), (241, 253),
             (246, 255), (238, 251), (236, 255),
+            (46, 24), (196, 24),  # green/red dots on title blue
         ]
     else:
         scheme = [
@@ -93,6 +131,8 @@ def colors():
             (curses.COLOR_BLACK, curses.COLOR_WHITE),
             (curses.COLOR_BLACK, curses.COLOR_WHITE),
             (curses.COLOR_BLACK, curses.COLOR_WHITE),
+            (curses.COLOR_GREEN, curses.COLOR_BLUE),
+            (curses.COLOR_RED, curses.COLOR_BLUE),
         ]
     for num, pair in enumerate(scheme, 1):
         curses.init_pair(num, *pair)
