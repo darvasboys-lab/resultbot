@@ -273,8 +273,118 @@ def selection_json():
         "target_pct":d["target_pct"],
         "execution_enabled":False,
         "execution_status":"TEST_ONLY_NOT_CONNECTED_TO_DHAN",
-        "live_amo_strategy":"ENTRY_ONLY"
+        "live_amo_strategy":"ENTRY_ONLY",
+        "cut_down":d["cut_down"], "average_down":d["average_down"],
+        "average_down_amounts_inr":d["average_down_amounts_inr"],
+        "take_profit":d["take_profit"], "add_up":d["add_up"],
+        "add_up_amounts_inr":d["add_up_amounts_inr"],
+        "initial_budget_inr":d["initial_budget_inr"],
+        "total_buy_cap_inr":d["total_buy_cap_inr"]
     }
+
+
+
+def _stage_number(value, label, maximum=None):
+    """Convert numbers from a UI draft; reject NaN, bool and empty entries."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError(label + " must be a number")
+    number=float(value)
+    if not math.isfinite(number) or number<=0:
+        raise ValueError(label + " must be positive and finite")
+    if maximum is not None and number>maximum:
+        raise ValueError(label + " is outside the supported percentage range")
+    return number
+
+
+def apply_side_configuration(request):
+    """Atomically save one fully reviewed side of a TEST-only position plan.
+
+    The UI never partially saves an unfinished stage. All stages refer to the
+    FIRST fill price; each sale fraction refers to ORIGINAL filled shares.
+    """
+    if not isinstance(request, dict) or set(request) != {
+            "side", "mode", "stages", "terminal_pct"}:
+        raise ValueError("Invalid strategy configuration request")
+    side=request["side"]
+    mode=request["mode"]
+    stages=request["stages"]
+    if side not in ("down", "up"):
+        raise ValueError("Choose falling or rising price")
+    allowed_down={"CUT":"cut_down","AVERAGE":"average_down","STOP_ONLY":None}
+    allowed_up={"TAKE_PROFIT":"take_profit","ADD_UP":"add_up","TARGET_ONLY":None}
+    allowed=allowed_down if side=="down" else allowed_up
+    if not isinstance(mode, str) or mode not in allowed:
+        raise ValueError("Unknown strategy mode")
+    if not isinstance(stages, list) or len(stages)>5:
+        raise ValueError("Choose 0 to 5 price stages")
+    if allowed[mode] is None and stages:
+        raise ValueError("Hold-only mode does not accept intermediate stages")
+    terminal=_stage_number(request["terminal_pct"], "Final stop/target", 100)
+    if side=="down" and terminal>=50:
+        raise ValueError("Final stop must be below 50%")
+    d=load()
+    previous_trigger=0.0
+    cumulative_sold=0.0
+    triggers=[]
+    amounts=[]
+    for i, stage in enumerate(stages,1):
+        if not isinstance(stage, dict) or set(stage)!={"trigger_pct", ("buy_inr" if mode in ("AVERAGE","ADD_UP") else "sell_pct")}:
+            raise ValueError("Invalid fields in stage "+str(i))
+        trigger=_stage_number(stage["trigger_pct"], "Stage "+str(i)+" trigger", 100)
+        if trigger <= previous_trigger:
+            raise ValueError("Stage percentages must increase")
+        if trigger >= terminal:
+            raise ValueError("Final stop/target must be beyond every stage")
+        previous_trigger=trigger
+        if mode in ("AVERAGE", "ADD_UP"):
+            amount=stage["buy_inr"]
+            if type(amount) is not int or amount<=0:
+                raise ValueError("Buy amount must be a positive whole rupee amount")
+            amounts.append(amount)
+            triggers.append(trigger)
+        else:
+            percent=_stage_number(stage["sell_pct"], "Stage "+str(i)+" sale %", 100)
+            cumulative_sold+=percent
+            if cumulative_sold >=100-1e-9:
+                raise ValueError("Partial exits must leave shares for the final stop/target")
+            triggers.append([trigger, round(cumulative_sold, 6)])
+    mode_field = "down_mode" if side=="down" else "up_mode"
+    terminal_field = "stop_pct" if side=="down" else "target_pct"
+    d[mode_field]=mode
+    d[terminal_field]=terminal
+    active=allowed[mode]
+    if active:
+        d[active]=triggers
+        if active in ("average_down","add_up"):
+            d[active+"_amounts_inr"]=amounts
+
+    # This is an informational planned-buy envelope, not a user budget cap.
+    planned=d["initial_budget_inr"]
+    if d["down_mode"]=="AVERAGE":
+        planned+=sum(d["average_down_amounts_inr"])
+    if d["up_mode"]=="ADD_UP":
+        planned+=sum(d["add_up_amounts_inr"])
+    d["total_buy_cap_inr"]=max(d["total_buy_cap_inr"],planned)
+    d["execution_enabled"]=False
+    valid(d)
+
+    import tempfile
+    FILE.parent.mkdir(parents=True,exist_ok=True,mode=0o700)
+    FILE.parent.chmod(0o700)
+    fd,tmp=tempfile.mkstemp(prefix=".strategy-reviewed-",suffix=".json",dir=FILE.parent)
+    try:
+        with os.fdopen(fd,"w",encoding="utf-8") as stream:
+            json.dump(d,stream,indent=2)
+            stream.write("\n")
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.chmod(tmp,0o600)
+        os.replace(tmp,FILE)
+    finally:
+        if os.path.exists(tmp):
+            os.unlink(tmp)
+    return selection_json()
+
 
 
 def choose_modes(down=None, up=None):
@@ -326,6 +436,14 @@ if __name__=='__main__':
     if command=='self-test':test()
     elif command=='settings-json':
         print(json.dumps(selection_json(),indent=2))
+    elif command=='apply-side-json':
+        if len(sys.argv)!=3:
+            raise SystemExit("Usage: apply-side-json '<JSON>'")
+        try:
+            print(json.dumps(apply_side_configuration(json.loads(sys.argv[2])),indent=2))
+        except (ValueError,KeyError,TypeError) as exc:
+            print("STRATEGY NOT SAVED: "+str(exc),file=sys.stderr)
+            raise SystemExit(2) from None
     elif command=='choose':
         import argparse
         p=argparse.ArgumentParser(description="Save TEST-ONLY staged position modes")
@@ -344,4 +462,4 @@ if __name__=='__main__':
         first=float(sys.argv[2]) if len(sys.argv)>2 and command=='show' else 100
         if not math.isfinite(first) or first<=0:raise SystemExit('First fill must be positive')
         show(d,first)
-    else:raise SystemExit('Usage: resultbot strategy [easy | show [first_fill_price] | configure | settings-json | choose --down CODE | choose --up CODE | self-test]')
+    else:raise SystemExit('Usage: resultbot strategy [easy | show [first_fill_price] | configure | settings-json | apply-side-json JSON | choose --down CODE | choose --up CODE | self-test]')
