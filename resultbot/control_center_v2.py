@@ -251,7 +251,7 @@ def start(win):
                   getattr(curses, "BUTTON5_PRESSED", 0))
     try:
         curses.mousemask(mouse_mask)
-        curses.mouseinterval(180)
+        curses.mouseinterval(400)
     except curses.error:
         pass
     page = "CONTROL CENTER"
