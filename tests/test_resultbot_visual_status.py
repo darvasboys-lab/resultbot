@@ -1,6 +1,6 @@
 """Offline tests for ResultBot visual status; no broker orders or data writes."""
 import unittest
-from unittest.mock import patch
+from unittest.mock import patch, MagicMock
 from types import SimpleNamespace
 
 from resultbot import control_center_v2 as ui
@@ -14,11 +14,47 @@ class TestResultBotStatusPolish(unittest.TestCase):
 
     def test_green_live_only_when_armed_and_listener_running(self):
         self.assertEqual(ui.bot_status_indicator(True, True), ("BOT LIVE (AMO)", 12))
-        self.assertEqual(ui.bot_status_indicator(False, True), ("BOT LISTENING", 3))
-        self.assertEqual(ui.bot_status_indicator(None, True), ("BOT LISTENING", 3))
+        self.assertEqual(ui.bot_status_indicator(False, True), ("BOT LISTENING", 12))
+        self.assertEqual(ui.bot_status_indicator(None, True), ("BOT LISTENING", 12))
         self.assertEqual(ui.bot_status_indicator(True, False), ("BOT OFFLINE", 13))
         self.assertEqual(ui.bot_status_indicator(True, None), ("BOT STATUS ?", 3))
         self.assertEqual(ui.bot_status_indicator(False, None), ("BOT STATUS ?", 3))
+
+    def test_bright_green_listening_and_green_cash_icon_are_drawn(self):
+        screen = MagicMock()
+        screen.getmaxyx.return_value = (32, 100)
+        state = {"amo_enabled":False, "per_order_budget_inr":1000,
+                 "source":"BOTH"}
+        with patch.object(ui, "draw_text") as drawing, \
+             patch.object(ui, "card") as cards, \
+             patch.object(ui, "line"), \
+             patch.object(ui.curses, "color_pair", return_value=0):
+            self.assertTrue(ui.render(screen, state, "CONTROL CENTER",
+                                      [], 0, 0, listener_running=True))
+        self.assertTrue(any(
+            call.args[2] == "BOT LISTENING" and call.args[3] == 12
+            for call in drawing.call_args_list))
+        self.assertTrue(any(
+            call.args[2] == "💵" and call.args[3] == 14
+            for call in drawing.call_args_list))
+        self.assertTrue(any(
+            call.args[3] == "TRADING AMO" and call.args[4] == "● AMO OFF"
+            for call in cards.call_args_list))
+        self.assertTrue(any(
+            call.args[3] == "PER ORDER" and call.args[4] == "   ₹1,000"
+            for call in cards.call_args_list))
+
+    def test_unavailable_budget_does_not_draw_cash_icon(self):
+        screen = MagicMock()
+        screen.getmaxyx.return_value = (32, 100)
+        with patch.object(ui, "draw_text") as drawing, \
+             patch.object(ui, "card"), \
+             patch.object(ui, "line"), \
+             patch.object(ui.curses, "color_pair", return_value=0):
+            ui.render(screen, {"amo_enabled":False}, "CONTROL CENTER",
+                      [], 0, 0, listener_running=False)
+        self.assertFalse(any(call.args[2] == "💵"
+                             for call in drawing.call_args_list))
 
     def test_listener_status_reads_only_systemctl(self):
         with patch.object(ui.subprocess, "run", return_value=SimpleNamespace(
