@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""ResultBot Control Center V2: presentation-only terminal frontend."""
+"""ResultBot Control Center Premium: card-based terminal frontend (no trading code changes)."""
 from __future__ import annotations
 import curses
 import json
@@ -34,86 +34,160 @@ def backend(*args):
         return {}, str(error)
 
 def colors():
+    """Blue background, soft-grey dashboard, white cards and yellow focus."""
     curses.start_color()
     if curses.COLORS >= 256:
-        scheme = [(255, 18), (235, 253), (255, 19), (235, 255),
-                  (235, 221), (28, 255), (160, 255)]
+        scheme = [
+            (255, 18), (236, 253), (255, 24), (238, 255),
+            (235, 221), (28, 255), (160, 255), (241, 253),
+            (246, 255), (238, 251), (236, 255),
+        ]
     else:
-        scheme = [(curses.COLOR_WHITE, curses.COLOR_BLUE),
-                  (curses.COLOR_BLACK, curses.COLOR_WHITE),
-                  (curses.COLOR_WHITE, curses.COLOR_BLUE),
-                  (curses.COLOR_BLACK, curses.COLOR_WHITE),
-                  (curses.COLOR_BLACK, curses.COLOR_YELLOW),
-                  (curses.COLOR_GREEN, curses.COLOR_WHITE),
-                  (curses.COLOR_RED, curses.COLOR_WHITE)]
+        scheme = [
+            (curses.COLOR_WHITE, curses.COLOR_BLUE),
+            (curses.COLOR_BLACK, curses.COLOR_WHITE),
+            (curses.COLOR_WHITE, curses.COLOR_BLUE),
+            (curses.COLOR_BLACK, curses.COLOR_WHITE),
+            (curses.COLOR_BLACK, curses.COLOR_YELLOW),
+            (curses.COLOR_GREEN, curses.COLOR_WHITE),
+            (curses.COLOR_RED, curses.COLOR_WHITE),
+            (curses.COLOR_BLACK, curses.COLOR_WHITE),
+            (curses.COLOR_BLACK, curses.COLOR_WHITE),
+            (curses.COLOR_BLACK, curses.COLOR_WHITE),
+            (curses.COLOR_BLACK, curses.COLOR_WHITE),
+        ]
     for num, pair in enumerate(scheme, 1):
         curses.init_pair(num, *pair)
+
 
 def draw_text(win, y, x, value, style=2, limit=999):
     h, w = win.getmaxyx()
     if not (0 <= y < h and 0 <= x < w - 1):
         return
     try:
-        win.addnstr(y, x, str(value).replace("\n", " "),
+        win.addnstr(y, x, str(value).replace("\n", " ").replace("\r", " "),
                     min(limit, w - x - 1), curses.color_pair(style))
     except curses.error:
         pass
 
+
 def line(win, y, x, width, style=2):
     draw_text(win, y, x, " " * max(0, width), style, width)
+
+
+def card(win, y, x, width, heading, value, description, value_style=4, compact=False):
+    height = 4 if compact else 5
+    for row in range(y, y + height):
+        line(win, row, x, width, 4)
+    draw_text(win, y, x, "╭" + "─" * (width - 2) + "╮", 9, width)
+    draw_text(win, y + height - 1, x, "╰" + "─" * (width - 2) + "╯", 9, width)
+    for row in range(y + 1, y + height - 1):
+        draw_text(win, row, x, "│", 9)
+        draw_text(win, row, x + width - 1, "│", 9)
+    draw_text(win, y + 1, x + 2, heading, 4, width - 4)
+    draw_text(win, y + 2, x + 2, value, value_style, width - 4)
+    if not compact:
+        draw_text(win, y + 3, x + 2, description, 4, width - 4)
+
 
 def render(win, state, page, entries, selection, focus, note="", amount=""):
     h, w = win.getmaxyx()
     win.bkgd(" ", curses.color_pair(1))
     win.erase()
-    if h < 23 or w < 74:
-        draw_text(win, 2, 2, "Please enlarge terminal to 74 x 23. Esc to exit.", 1)
+    if h < 24 or w < 78:
+        draw_text(win, 2, 2, "Resize terminal to at least 78 columns x 24 rows.", 1)
+        draw_text(win, 4, 2, "Press Esc to exit.", 1)
         win.refresh()
         return False
+    compact = h < 30
+    height = 24 if compact else 29
     width = min(w - 4, 98)
     left = (w - width) // 2
-    top = (h - 23) // 2
-    for row in range(top, top + 23):
-        line(win, row, left, width)
-    for row in range(top, top + 3):
+    top = (h - height) // 2
+
+    for row in range(top, top + height):
+        line(win, row, left, width, 2)
+    for row in range(top, top + (2 if compact else 3)):
         line(win, row, left, width, 3)
-    draw_text(win, top + 1, left + 3, "RESULTBOT  /  " + page, 3)
-    draw_text(win, top + 3, left + 3, "CURRENT CONFIGURATION", 2)
-    enabled = state.get("amo_enabled")
+    draw_text(win, top + 1, left + 3, "▣ RESULTBOT  /  " + page, 3, width - 30)
+    draw_text(win, top + 1, left + width - 19, "● LIVE SETTINGS", 3, 17)
+
+    draw_text(win, top + (3 if compact else 4), left + 3,
+              "CURRENT CONFIGURATION", 8)
     budget = state.get("per_order_budget_inr")
-    source = state.get("source", "UNKNOWN")
-    cards = [
-        ("TRADING AMO", "ON" if enabled else "OFF", 6 if enabled else 7),
-        ("ALERT SOURCE", source, 4),
-        ("PER ORDER", "INR {:,}".format(budget) if isinstance(budget, int) else "UNKNOWN", 4)
-    ]
-    card_w = (width - 12) // 3
-    for i, (label, val, style) in enumerate(cards):
-        x = left + 3 + i * (card_w + 2)
-        for row in range(top + 5, top + 9):
-            line(win, row, x, card_w, 4)
-        draw_text(win, top + 6, x + 2, label, 4, card_w - 3)
-        draw_text(win, top + 7, x + 2, val, style, card_w - 3)
-    draw_text(win, top + 10, left + 3, "─" * (width - 6), 2)
-    draw_text(win, top + 11, left + 3,
-              "CONFIGURATION MENU" if page == "CONTROL CENTER" else page, 2)
-    for i, (code, label, description) in enumerate(entries[:5]):
-        row = top + 12 + i
-        selected = 5 if i == selection and focus == 0 else 2
-        line(win, row, left + 3, width - 6, selected)
-        draw_text(win, row, left + 5, (code + "  " + label).strip(), selected, 35)
-        draw_text(win, row, left + 40, description, selected, width - 44)
+    amount_label = "₹{:,.0f}".format(budget) if isinstance(budget, int) else "Unavailable"
+    on = state.get("amo_enabled")
+    cards = (
+        ("TRADING AMO", "● ON" if on else "○ OFF" if on is False else "UNKNOWN",
+         "Trading enabled" if on else "Trading paused", 6 if on else 7 if on is False else 4),
+        ("ALERT SOURCE", str(state.get("source", "UNKNOWN")), "Telegram sources", 4),
+        ("PER ORDER", amount_label, "Future orders only", 4),
+    )
+    card_width = (width - 10) // 3
+    for i, props in enumerate(cards):
+        card(win, top + (4 if compact else 5),
+             left + 3 + i * (card_width + 2), card_width,
+             *props, compact=compact)
+
+    draw_text(win, top + (8 if compact else 11), left + 3,
+              "─" * (width - 6), 8, width - 6)
+    draw_text(win, top + (9 if compact else 12), left + 3,
+              "CONFIGURATION MENU" if page == "CONTROL CENTER" else page, 2, width - 6)
+    row_start = top + (10 if compact else 14)
     if page == "ORDER BUDGET":
-        line(win, top + 15, left + 5, min(38, width - 10), 5)
-        draw_text(win, top + 15, left + 7, "INR " + amount + "_", 5, 32)
+        draw_text(win, row_start, left + 5,
+                  "Enter the investment amount for EACH new order:", 2)
+        field_style = 5 if focus == 0 else 4
+        line(win, row_start + 2, left + 5, min(45, width - 12), field_style)
+        draw_text(win, row_start + 2, left + 7,
+                  "₹ " + amount + "▏", field_style, min(40, width - 16))
+        draw_text(win, row_start + 4, left + 5,
+                  "Whole rupees  ·  Enter Save  ·  Esc Cancel", 8)
+    elif page == "TRADING SWITCH":
+        desired = "OFF" if state.get("amo_enabled") else "ON"
+        draw_text(win, row_start + 1, left + 5,
+                  "CHANGE AMO STATE TO " + desired + "?", 2)
+        draw_text(win, row_start + 3, left + 5,
+                  "Press Y to confirm, N / Esc to cancel.", 2)
+        draw_text(win, row_start + 5, left + 5,
+                  "Existing broker orders are not cancelled by switching OFF.", 8)
+    else:
+        for i, (code, label, description) in enumerate(entries[:5]):
+            row_y = row_start + 2 * i
+            selected = 5 if i == selection and focus == 0 else 2
+            line(win, row_y, left + 3, width - 6, selected)
+            if page == "ALERT SOURCE":
+                marker = "◉" if label == state.get("source") else "○"
+                code = marker + " " + code
+            draw_text(win, row_y, left + 5, str(code), selected, 7)
+            draw_text(win, row_y, left + 12, label, selected, 27)
+            desc_x = left + max(42, width // 2)
+            draw_text(win, row_y, desc_x, description, selected,
+                      width - (desc_x - left) - 4)
+
+    footer = top + height - 4
+    for row in range(footer, footer + 4):
+        line(win, row, left, width, 10)
+    draw_text(win, footer, left + 3, "─" * (width - 6), 10, width - 6)
     if note:
-        draw_text(win, top + 18, left + 3, note, 7 if "FAILED" in note or "BLOCKED" in note else 2, width - 6)
-    draw_text(win, top + 19, left + 3, "Up/Down: move   Tab: OK/Cancel   Enter: select   Esc: back", 2, width - 6)
-    draw_text(win, top + 21, left + 3, "Saved settings • Future signals only", 2)
-    draw_text(win, top + 21, left + width - 23, "[ OK ]", 5 if focus == 1 else 4)
-    draw_text(win, top + 21, left + width - 13, "[ Cancel ]", 5 if focus == 2 else 4)
+        is_error = any(word in note for word in
+                       ("FAILED", "BLOCKED", "NOT SAVED", "UNAVAILABLE"))
+        draw_text(win, footer + 1, left + 3, note,
+                  7 if is_error else 10, width - 6)
+    else:
+        draw_text(win, footer + 1, left + 3,
+                  "Changes apply to future signals  ·  Existing orders unchanged",
+                  10, width - 6)
+    draw_text(win, footer + 2, left + 3,
+              "↑↓ Move  ·  Tab Buttons  ·  Enter Select  ·  Esc Back",
+              10, width - 28)
+    draw_text(win, footer + 2, left + width - 21,
+              " OK ", 5 if focus == 1 else 11)
+    draw_text(win, footer + 2, left + width - 13,
+              " Cancel ", 5 if focus == 2 else 11)
     win.refresh()
     return True
+
 
 def start(win):
     try: curses.curs_set(0)
