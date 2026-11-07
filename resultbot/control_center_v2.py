@@ -325,6 +325,7 @@ def start(win):
     fresh_amount = True
     overview_offset = 0
     wizard = None
+    oco_editor = None
     while True:
         plan, plan_error = strategy_backend("settings-json")
         if plan_error:
@@ -357,6 +358,7 @@ def start(win):
                 ("01", "FALLING PRICE", str(plan.get("down_mode", "Unavailable"))),
                 ("02", "RISING PRICE", str(plan.get("up_mode", "Unavailable"))),
                 ("03", "REVIEW PLAN", "View saved strategy stages"),
+                ("04", "OCO SETTINGS", "SL/TP from Dhan executed price"),
                 ("00", "BACK", "Return to main menu"),
             ]
             selection = index
@@ -379,7 +381,8 @@ def start(win):
                 ("!!", "TEST PLAN", "LIVE stays entry-only Equity AMO"),
             ]
             selection = -1
-        elif page in ("STRATEGY WIZARD", "STRATEGY CONFIRM"):
+        elif page in ("STRATEGY WIZARD", "STRATEGY CONFIRM",
+                       "OCO EDIT", "OCO CONFIRM"):
             entries=[]
             selection=-1
         elif page == "TRADING SWITCH":
@@ -396,7 +399,7 @@ def start(win):
                 entries = [("--", "NO ORDER RECORDS", status_error or "No existing orders")]
             selection = -1
         visible = render(win, saved, page, entries, selection,
-                         focus, note, amount, plan, wizard)
+                         focus, note, amount, plan, wizard, oco_editor)
         key = win.getch()
         if key == curses.KEY_MOUSE:
             try:
@@ -479,13 +482,23 @@ def start(win):
                     note = "Enter a positive whole-rupee amount"
             elif key == 27: page = "CONTROL CENTER"; index = 1; focus = 0
         elif page == "STRATEGY":
-            if key == curses.KEY_UP: index = (index - 1) % 4; focus = 0
-            elif key == curses.KEY_DOWN: index = (index + 1) % 4; focus = 0
+            if key == curses.KEY_UP: index = (index - 1) % 5; focus = 0
+            elif key == curses.KEY_DOWN: index = (index + 1) % 5; focus = 0
             elif key == 9: focus = (focus + 1) % 3
             elif key == curses.KEY_BTAB: focus = (focus - 1) % 3
             elif key in ENTER or key == 32:
-                if focus == 2 or index == 3:
+                if focus == 2 or index == 4:
                     page = "CONTROL CENTER"; index = 2; focus = 0
+                elif index == 3:
+                    oco_editor = {
+                        "phase": 0,
+                        "stop_pct": str(plan.get("stop_pct", "3")),
+                        "target_pct": str(plan.get("target_pct", "6")),
+                        "input": str(plan.get("stop_pct", "3")),
+                        "fresh": True
+                    }
+                    page = "OCO EDIT"
+                    focus = 0
                 else:
                     page = ["STRATEGY DOWN", "STRATEGY UP", "STRATEGY REVIEW"][index]
                     if page == "STRATEGY DOWN":
