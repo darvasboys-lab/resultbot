@@ -45,7 +45,7 @@ class TestIntradayBuyBuffer(unittest.TestCase):
                                    tick_size="0.05",buffer_pct=2)
         self.assertEqual(p["buy_limit_price"],"102.00")
         self.assertEqual(p["whole_shares_affordable_at_limit"],9)
-        self.assertEqual(p["maximum_entry_notional_inr"],"918")
+        self.assertEqual(p["maximum_entry_notional_inr"],"918.00")
         self.assertEqual(p["product_type"],"INTRADAY")
         self.assertEqual(p["order_type"],"LIMIT")
         self.assertFalse(p["broker_order_submitted"])
