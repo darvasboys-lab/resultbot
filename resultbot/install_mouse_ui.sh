@@ -36,7 +36,7 @@ spec.loader.exec_module(ui)
 assert ui.mouse_hit_test("CONTROL CENTER",32,100,10,15)==("item",0)
 assert ui.mouse_hit_test("CONTROL CENTER",24,80,10,10)==("item",0)
 assert ui.mouse_hit_test("ORDER BUDGET",24,80,12,12)==("input",None)
-assert ui.mouse_hit_test("ALERT SOURCE",24,80,61,22)==("ok",None)
+assert ui.mouse_hit_test("ALERT SOURCE",24,80,58,22)==("ok",None)
 assert ui.mouse_hit_test("ALERT SOURCE",24,80,70,22)==("cancel",None)
 print("PASS: Mouse menu, compact layout, text field, OK and Cancel")
 VERIFY
