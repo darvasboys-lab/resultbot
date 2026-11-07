@@ -6,7 +6,7 @@ umask 077
 DIR="$HOME/resultbot-data"
 PY="$HOME/uditbot/venv/bin/python"
 TARGET="$DIR/control_center_v2.py"
-SOURCE="https://raw.githubusercontent.com/darvasboys-lab/resultbot/aad322e21ff5d2c56cec4a75b8daf9742fd84b4a/resultbot/control_center_v2.py"
+SOURCE="https://raw.githubusercontent.com/darvasboys-lab/resultbot/4cb7dfa4aeaa3c838d6f9f94f2c418bfcbcd5558/resultbot/control_center_v2.py"
 
 if [[ ! -x "$PY" || ! -f "$TARGET" || -L "$TARGET" ]]; then
   echo "ERROR: Existing premium ResultBot Control Center not found. No changes." >&2
@@ -55,18 +55,38 @@ assert any(x.args[3]=="💵" and x.args[4]==14
            for x in drawing.call_args_list)
 assert any(x.args[4]=="TRADING AMO" and x.args[5]=="● AMO OFF"
            for x in cards.call_args_list)
-print("PASS: bright-green BOT LISTENING, red AMO OFF, green cash icon and mouse rows")
+assert ui.breadcrumb_text("STRATEGY DOWN") == (
+    "RESULTBOT › STRATEGY PLAN › FALLING PRICE")
+assert ui.breadcrumb_text("STRATEGY UP") == (
+    "RESULTBOT › STRATEGY PLAN › RISING PRICE")
+assert ui.breadcrumb_text("STRATEGY WIZARD",
+                           {"side":"down","mode":"AVERAGE"}).endswith(" › SETUP")
+assert ui.direction_arrow_style("▼",False)==15
+assert ui.direction_arrow_style("▲",False)==16
+assert ui.direction_arrow_style("▼",True)==17
+assert ui.direction_arrow_style("▲",True)==18
+with patch.object(ui,"draw_text") as arrows, patch.object(ui,"card"), \
+     patch.object(ui,"line"),patch.object(ui.curses,"color_pair",return_value=0):
+    assert ui.render(screen,{"amo_enabled":False,"per_order_budget_inr":1000},
+                     "STRATEGY",[("01","▼ FALLING PRICE","CUT"),
+                                 ("02","▲ RISING PRICE","TARGET_ONLY")],
+                     0,0,listener_running=True)
+assert any(c.args[3]=="▼" and c.args[4]==17 for c in arrows.call_args_list)
+assert any(c.args[3]=="▲" and c.args[4]==16 for c in arrows.call_args_list)
+assert any(c.args[3]=="▣ RESULTBOT › STRATEGY PLAN" for c in arrows.call_args_list)
+print("PASS: red/green arrows, navigational breadcrumbs, green listening/cash, mouse rows")
 CHECK
 
 STAMP="$(date +%Y%m%d-%H%M%S)"
-BACKUP="$TARGET.before-visual-status-$STAMP"
+BACKUP="$TARGET.before-breadcrumb-colors-$STAMP"
 cp -p "$TARGET" "$BACKUP"
 install -m 600 "$TMP" "$TARGET"
 
-echo "SUCCESS: Visual status patch installed. Run: bot setup"
+echo "SUCCESS: Breadcrumb navigation and direction colors installed. Run: bot setup"
 echo "Backup: $BACKUP"
 echo "Restore: cp -p '$BACKUP' '$TARGET'"
-echo "Arrows: ▼ FALLING PRICE / ▲ RISING PRICE"
+echo "Arrows: red ▼ FALLING PRICE / green ▲ RISING PRICE"
+echo "Navigation: RESULTBOT › STRATEGY PLAN › FALLING PRICE"
 echo "Red dot: AMO OFF | Bright green: BOT LISTENING when listener active"
 echo "Green cash icon: PER ORDER 💵 ₹1,000 (reflects your actual saved budget)"
 echo "Green BOT LIVE (AMO) only when AMO is armed and listener active"
