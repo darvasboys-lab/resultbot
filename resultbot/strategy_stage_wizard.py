@@ -73,9 +73,6 @@ def _clean_number(raw, kind):
     import math
     if not math.isfinite(n) or n<=0:
         raise ValueError("Percentage must be positive")
-    if kind=="exit":
-        if n>=50: # caller adjusts for rising target
-            pass
     if n>=100:
         raise ValueError("Percentage must be below 100")
     return n
