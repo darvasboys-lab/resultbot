@@ -293,9 +293,10 @@ def mouse_hit_test(page, height, width, x, y):
                 if y == row_start + step * i:
                     return "item", i
 
-    if page == "ORDER BUDGET":
+    if page in ("ORDER BUDGET","STRATEGY WIZARD"):
         row_start = top + (10 if compact else 14)
-        if y == row_start + 2 and left + 5 <= x < left + min(50, panel_width - 7):
+        field_y=row_start + (2 if page=="ORDER BUDGET" else 4)
+        if y == field_y and left + 5 <= x < left + min(50,panel_width-7):
             return "input", None
 
     return None, None
@@ -323,6 +324,7 @@ def start(win):
     amount = ""
     fresh_amount = True
     overview_offset = 0
+    wizard = None
     while True:
         plan, plan_error = strategy_backend("settings-json")
         if plan_error:
@@ -368,13 +370,18 @@ def start(win):
             selection = index
         elif page == "STRATEGY REVIEW":
             entries = [
-                ("DN", "DOWNSIDE", str(plan.get("down_mode", "?"))),
-                ("UP", "UPSIDE", str(plan.get("up_mode", "?"))),
-                ("SL", "FINAL STOP", str(plan.get("stop_pct", "?")) + "%"),
-                ("TP", "FINAL TARGET", str(plan.get("target_pct", "?")) + "%"),
-                ("!!", "TEST ONLY", "LIVE remains entry-only Equity AMO"),
+                ("DN", "FALL: "+str(plan.get("down_mode", "?")),
+                 stage_flow.saved_summary(plan,"down")),
+                ("UP", "RISE: "+str(plan.get("up_mode", "?")),
+                 stage_flow.saved_summary(plan,"up")),
+                ("SL", "FINAL STOP", str(plan.get("stop_pct", "?"))+"% below first buy"),
+                ("TP", "FINAL TARGET", str(plan.get("target_pct", "?"))+"% above first buy"),
+                ("!!", "TEST PLAN", "LIVE stays entry-only Equity AMO"),
             ]
             selection = -1
+        elif page in ("STRATEGY WIZARD", "STRATEGY CONFIRM"):
+            entries=[]
+            selection=-1
         elif page == "TRADING SWITCH":
             desired = "OFF" if saved.get("amo_enabled") else "ON"
             entries = [("!!", "TURN AMO " + desired, "Press Y to confirm; Esc to cancel")]
@@ -389,7 +396,7 @@ def start(win):
                 entries = [("--", "NO ORDER RECORDS", status_error or "No existing orders")]
             selection = -1
         visible = render(win, saved, page, entries, selection,
-                         focus, note, amount, plan)
+                         focus, note, amount, plan, wizard)
         key = win.getch()
         if key == curses.KEY_MOUSE:
             try:
