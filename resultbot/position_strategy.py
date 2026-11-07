@@ -338,8 +338,8 @@ def apply_side_configuration(request):
         previous_trigger=trigger
         if mode in ("AVERAGE", "ADD_UP"):
             amount=stage["buy_inr"]
-            if type(amount) is not int or amount<=0:
-                raise ValueError("Buy amount must be a positive whole rupee amount")
+            if type(amount) is not int or not (0<amount<=2**63-1):
+                raise ValueError("Buy amount must be a positive whole-rupee number")
             amounts.append(amount)
             triggers.append(trigger)
         else:
