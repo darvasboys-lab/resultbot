@@ -5,6 +5,10 @@ import curses
 import json
 import subprocess
 from pathlib import Path
+try:
+    from . import strategy_stage_wizard as stage_flow
+except ImportError:
+    import strategy_stage_wizard as stage_flow
 
 ROOT = Path.home() / "resultbot-data"
 PY = Path.home() / "uditbot/venv/bin/python"
@@ -106,7 +110,7 @@ def card(win, y, x, width, heading, value, description, value_style=4, compact=F
         draw_text(win, y + 3, x + 2, description, 4, width - 4)
 
 
-def render(win, state, page, entries, selection, focus, note="", amount="", plan=None):
+def render(win, state, page, entries, selection, focus, note="", amount="", plan=None, wizard=None):
     plan = plan or {}
     h, w = win.getmaxyx()
     win.bkgd(" ", curses.color_pair(1))
@@ -155,7 +159,36 @@ def render(win, state, page, entries, selection, focus, note="", amount="", plan
         draw_text(win, top + (9 if compact else 12), left + 25, summary, 8, width - 28)
     row_start = top + (10 if compact else 14)
     row_step = 1 if compact else 2
-    if page == "ORDER BUDGET":
+    if page == "STRATEGY WIZARD" and wizard:
+        q = wizard["questions"][wizard["position"]]
+        step = wizard["position"]+1
+        total = len(wizard["questions"])
+        direction = "FALL" if wizard["side"]=="down" else "RISE"
+        draw_text(win, row_start, left + 5,
+                  "{} / {}  |  {}: {}  [TEST PLAN]".format(
+                      step, total, direction, wizard["mode"]), 8, width - 10)
+        draw_text(win, row_start+2, left+5, q["prompt"], 2, width-10)
+        field_style = 5 if focus==0 else 4
+        line(win, row_start+4, left+5, min(45,width-12), field_style)
+        draw_text(win, row_start+4, left+7,
+                  wizard["input"] + "▏", field_style, min(39,width-16))
+        draw_text(win, row_start+6, left+5,
+                  q["hint"], 8, width-10)
+        draw_text(win, row_start+7, left+5,
+                  "Enter / OK: next    Esc / Cancel: discard draft", 8, width-10)
+    elif page == "STRATEGY CONFIRM" and wizard:
+        draw_text(win, row_start, left + 5,
+                  "REVIEW BEFORE SAVE  |  {}  [TEST PLAN]".format(wizard["mode"]),
+                  2, width-10)
+        for i, (label, trigger, detail) in enumerate(stage_flow.stage_summary(wizard)[:6]):
+            row_y=row_start+2+i
+            if row_y >= top+height-5: break
+            draw_text(win, row_y, left+6,
+                      "{}  {:<18} {}".format(label,trigger,detail),
+                      2, width-12)
+        draw_text(win, top+height-6, left+5,
+                  "OK / Y: SAVE PLAN    Cancel / N: discard", 8, width-11)
+    elif page == "ORDER BUDGET":
         draw_text(win, row_start, left + 5,
                   "Enter the investment amount for EACH new order:", 2)
         field_style = 5 if focus == 0 else 4
