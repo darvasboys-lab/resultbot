@@ -387,6 +387,42 @@ def apply_side_configuration(request):
 
 
 
+
+def set_oco_percentages(stop_pct, target_pct):
+    """Save only final SL/target percentages; does not touch broker orders.
+
+    The reference price is not stored here: it is obtained later from Dhan's
+    confirmed averageTradedPrice for the original equity BUY order.
+    """
+    d=load()
+    for key, val in (("stop_pct",stop_pct),("target_pct",target_pct)):
+        if isinstance(val,bool):
+            raise ValueError("Invalid "+key)
+        try: n=float(val)
+        except (TypeError,ValueError):
+            raise ValueError("Invalid "+key) from None
+        if not math.isfinite(n) or n<=0:
+            raise ValueError(key+" must be positive and finite")
+        d[key]=n
+    d["execution_enabled"]=False
+    valid(d)
+    import tempfile
+    FILE.parent.mkdir(parents=True,exist_ok=True,mode=0o700)
+    FILE.parent.chmod(0o700)
+    fd,tmp=tempfile.mkstemp(prefix=".oco-settings-",suffix=".json",dir=FILE.parent)
+    try:
+        with os.fdopen(fd,"w",encoding="utf-8") as stream:
+            json.dump(d,stream,indent=2)
+            stream.write("\n")
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.chmod(tmp,0o600)
+        os.replace(tmp,FILE)
+    finally:
+        if os.path.exists(tmp):
+            os.unlink(tmp)
+    return selection_json()
+
 def choose_modes(down=None, up=None):
     """Update just the selected modes; never enable broker execution."""
     d=load()
@@ -436,6 +472,16 @@ if __name__=='__main__':
     if command=='self-test':test()
     elif command=='settings-json':
         print(json.dumps(selection_json(),indent=2))
+    elif command=='set-oco':
+        import argparse
+        p=argparse.ArgumentParser(description="Save final OCO SL/target as TEST-only strategy configuration")
+        p.add_argument("--sl-pct",type=float,required=True)
+        p.add_argument("--target-pct",type=float,required=True)
+        args=p.parse_args(sys.argv[2:])
+        try: print(json.dumps(set_oco_percentages(args.sl_pct,args.target_pct),indent=2))
+        except ValueError as exc:
+            print("OCO SETTINGS NOT SAVED: "+str(exc),file=sys.stderr)
+            raise SystemExit(2) from None
     elif command=='apply-side-json':
         if len(sys.argv)!=3:
             raise SystemExit("Usage: apply-side-json '<JSON>'")
