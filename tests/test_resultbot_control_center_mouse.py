@@ -10,7 +10,7 @@ class TestMouseHitTest(unittest.TestCase):
         left = (w - panel_width) // 2
         top = (h - 29) // 2
         row_start = top + 14
-        for index in range(5):
+        for index in range(6):
             self.assertEqual(
                 ui.mouse_hit_test("CONTROL CENTER", h, w, left + 8,
                                   row_start + 2 * index), ("item", index)
@@ -22,7 +22,7 @@ class TestMouseHitTest(unittest.TestCase):
         left = (w - panel_width) // 2
         top = (h - 29) // 2
         card_width = (panel_width - 10) // 3
-        for card, target in enumerate((2, 0, 1)):
+        for card, target in enumerate((3, 0, 1)):
             x = left + 3 + card * (card_width + 2) + 2
             self.assertEqual(
                 ui.mouse_hit_test("CONTROL CENTER", h, w, x, top + 7),
@@ -37,6 +37,22 @@ class TestMouseHitTest(unittest.TestCase):
                 ui.mouse_hit_test("ALERT SOURCE", h, w, 18,
                                   top + 14 + 2 * index), ("item", index)
             )
+
+    def test_strategy_selection_mouse_rows(self):
+        h, w = 32, 100
+        top = (h - 29) // 2
+        for page, count in (("STRATEGY", 4), ("STRATEGY DOWN", 3),
+                            ("STRATEGY UP", 3), ("STRATEGY REVIEW", 5)):
+            for index in range(count):
+                self.assertEqual(ui.mouse_hit_test(page, h, w, 18,
+                                                   top + 14 + 2*index),
+                                 ("item", index))
+
+    def test_compact_sixth_menu_row(self):
+        self.assertEqual(
+            ui.mouse_hit_test("CONTROL CENTER", 24, 80, 12, 15),
+            ("item", 5)
+        )
 
     def test_ok_cancel(self):
         for h, w, panel_h in ((32, 100, 29), (24, 80, 24)):
