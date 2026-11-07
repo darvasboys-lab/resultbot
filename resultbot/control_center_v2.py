@@ -108,6 +108,58 @@ def amo_status_indicator(amo_enabled):
     return "● AMO UNKNOWN", 4
 
 
+
+def breadcrumb_segments(page, wizard=None, oco_editor=None):
+    """Navigation ancestry for the visible screen; cosmetic/read-only."""
+    root = ["RESULTBOT"]
+    simple = {
+        "CONTROL CENTER": ["CONTROL CENTER"],
+        "ALERT SOURCE": ["ALERT SOURCE"],
+        "ORDER BUDGET": ["ORDER BUDGET"],
+        "TRADING SWITCH": ["TRADING SWITCH"],
+        "OVERVIEW": ["ORDER OVERVIEW"],
+        "STRATEGY": ["STRATEGY PLAN"],
+        "STRATEGY DOWN": ["STRATEGY PLAN", "FALLING PRICE"],
+        "STRATEGY UP": ["STRATEGY PLAN", "RISING PRICE"],
+        "STRATEGY REVIEW": ["STRATEGY PLAN", "REVIEW PLAN"],
+        "BUY BUFFER": ["STRATEGY PLAN", "BUY BUFFER"],
+        "BUFFER CUSTOM": ["STRATEGY PLAN", "BUY BUFFER", "CUSTOM"],
+        "OCO CONFIRM": ["STRATEGY PLAN", "OCO SETTINGS", "REVIEW"],
+    }
+    if page == "OCO EDIT":
+        current = "TARGET" if oco_editor and oco_editor.get("phase") == 1 else "STOP LOSS"
+        return root + ["STRATEGY PLAN", "OCO SETTINGS", current]
+    if page in ("STRATEGY WIZARD", "STRATEGY CONFIRM"):
+        side = "RISING PRICE" if wizard and wizard.get("side") == "up" else "FALLING PRICE"
+        mode = str(wizard.get("mode", "SETUP")) if wizard else "SETUP"
+        step = "REVIEW" if page == "STRATEGY CONFIRM" else "SETUP"
+        return root + ["STRATEGY PLAN", side, mode, step]
+    return root + simple.get(page, [str(page)])
+
+
+def breadcrumb_text(page, wizard=None, oco_editor=None, max_chars=70):
+    """Keep the folder root and current leaf visible even on small terminals."""
+    parts = breadcrumb_segments(page, wizard, oco_editor)
+    full = " › ".join(parts)
+    if len(full) <= max_chars:
+        return full
+    for tail_count in range(len(parts) - 2, 0, -1):
+        shortened = " › ".join([parts[0], "…"] + parts[-tail_count:])
+        if len(shortened) <= max_chars:
+            return shortened
+    shortened = " › ".join([parts[0], "…", parts[-1]])
+    return shortened[:max_chars]
+
+
+def direction_arrow_style(symbol, selected=False):
+    """Arrow alone is colored; the surrounding row keeps normal focus colors."""
+    if symbol == "▼":
+        return 17 if selected else 15
+    if symbol == "▲":
+        return 18 if selected else 16
+    return None
+
+
 def colors():
     """Blue background, soft-grey dashboard, white cards and yellow focus."""
     curses.start_color()
@@ -118,6 +170,8 @@ def colors():
             (246, 255), (238, 251), (236, 255),
             (46, 24), (196, 24),  # green/red status on blue
             (34, 255),  # green banknote icon on white card
+            (196, 253), (46, 253),  # down red/up green on regular pale rows
+            (196, 221), (46, 221),  # same arrow colors on selected yellow row
         ]
     else:
         scheme = [
@@ -135,6 +189,10 @@ def colors():
             (curses.COLOR_GREEN, curses.COLOR_BLUE),
             (curses.COLOR_RED, curses.COLOR_BLUE),
             (curses.COLOR_GREEN, curses.COLOR_WHITE),
+            (curses.COLOR_RED, curses.COLOR_WHITE),
+            (curses.COLOR_GREEN, curses.COLOR_WHITE),
+            (curses.COLOR_RED, curses.COLOR_YELLOW),
+            (curses.COLOR_GREEN, curses.COLOR_YELLOW),
         ]
     for num, pair in enumerate(scheme, 1):
         curses.init_pair(num, *pair)
@@ -191,7 +249,8 @@ def render(win, state, page, entries, selection, focus, note="", amount="", plan
         line(win, row, left, width, 2)
     for row in range(top, top + (2 if compact else 3)):
         line(win, row, left, width, 3)
-    draw_text(win, top + 1, left + 3, "▣ RESULTBOT  /  " + page, 3, width - 30)
+    path = breadcrumb_text(page, wizard, oco_editor, max_chars=width - 25)
+    draw_text(win, top + 1, left + 3, "▣ " + path, 3, width - 25)
     live_label, dot_style = bot_status_indicator(state.get("amo_enabled"), listener_running)
     status_x = left + width - 19
     draw_text(win, top + 1, status_x, "●", dot_style, 1)
@@ -334,7 +393,15 @@ def render(win, state, page, entries, selection, focus, note="", amount="", plan
                 marker = "◉" if label == selected_value else "○"
                 code = marker + " " + code
             draw_text(win, row_y, left + 5, str(code), selected, 7)
-            draw_text(win, row_y, left + 12, label, selected, 27)
+            # Color just the direction arrow while retaining row highlight and
+            # the original mouse hitbox. Never paint a different background.
+            arrow = label[0] if page == "STRATEGY" and label else ""
+            arrow_style = direction_arrow_style(arrow, selected == 5)
+            if arrow_style is not None:
+                draw_text(win, row_y, left + 12, arrow, arrow_style, 1)
+                draw_text(win, row_y, left + 14, label[2:], selected, 25)
+            else:
+                draw_text(win, row_y, left + 12, label, selected, 27)
             desc_x = left + max(42, width // 2)
             draw_text(win, row_y, desc_x, description, selected,
                       width - (desc_x - left) - 4)
