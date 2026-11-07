@@ -179,7 +179,7 @@ def render(win, state, page, entries, selection, focus, note="", amount=""):
                   "Changes apply to future signals  ·  Existing orders unchanged",
                   10, width - 6)
     draw_text(win, footer + 2, left + 3,
-              "↑↓ Move  ·  Tab Buttons  ·  Enter Select  ·  Esc Back",
+              "Mouse Click  ·  ↑↓ Move  ·  Tab Buttons  ·  Enter Select  ·  Esc Back",
               10, width - 28)
     draw_text(win, footer + 2, left + width - 21,
               " OK ", 5 if focus == 1 else 11)
@@ -189,11 +189,71 @@ def render(win, state, page, entries, selection, focus, note="", amount=""):
     return True
 
 
+
+def mouse_hit_test(page, height, width, x, y):
+    """Find clickable UI targets; coordinates match render() exactly.
+
+    Returns (action, index). No trading or database operations occur here.
+    """
+    if height < 24 or width < 78:
+        return None, None
+
+    compact = height < 30
+    panel_height = 24 if compact else 29
+    panel_width = min(width - 4, 98)
+    left = (width - panel_width) // 2
+    top = (height - panel_height) // 2
+    footer_y = top + panel_height - 2
+
+    # Only the visible, unshadowed button rectangles are clickable.
+    if y == footer_y:
+        if left + panel_width - 21 <= x < left + panel_width - 17:
+            return "ok", None
+        if left + panel_width - 13 <= x < left + panel_width - 5:
+            return "cancel", None
+
+    if page == "CONTROL CENTER":
+        # The three status cards are shortcuts to their matching menus.
+        card_y = top + (4 if compact else 5)
+        card_h = 4 if compact else 5
+        card_width = (panel_width - 10) // 3
+        if card_y <= y < card_y + card_h:
+            for i, target in enumerate((2, 0, 1)):
+                card_x = left + 3 + i * (card_width + 2)
+                if card_x <= x < card_x + card_width:
+                    return "item", target
+
+    if page in ("CONTROL CENTER", "ALERT SOURCE"):
+        row_start = top + (10 if compact else 14)
+        count = 5 if page == "CONTROL CENTER" else 3
+        if left + 3 <= x < left + panel_width - 3:
+            for i in range(count):
+                if y == row_start + 2 * i:
+                    return "item", i
+
+    if page == "ORDER BUDGET":
+        row_start = top + (10 if compact else 14)
+        if y == row_start + 2 and left + 5 <= x < left + min(50, panel_width - 7):
+            return "input", None
+
+    return None, None
+
+
 def start(win):
     try: curses.curs_set(0)
     except curses.error: pass
     win.keypad(True)
     colors()
+    # Terminals that support xterm mouse reporting send click events here.
+    # Unsupported SSH terminals continue working with the keyboard.
+    mouse_mask = (curses.BUTTON1_CLICKED | curses.BUTTON1_DOUBLE_CLICKED |
+                  getattr(curses, "BUTTON4_PRESSED", 0) |
+                  getattr(curses, "BUTTON5_PRESSED", 0))
+    try:
+        curses.mousemask(mouse_mask)
+        curses.mouseinterval(180)
+    except curses.error:
+        pass
     page = "CONTROL CENTER"
     index = 0
     focus = 0
@@ -240,6 +300,34 @@ def start(win):
         visible = render(win, saved, page, entries, selection,
                          focus, note, amount)
         key = win.getch()
+        if key == curses.KEY_MOUSE:
+            try:
+                _, mx, my, _, buttons = curses.getmouse()
+            except curses.error:
+                continue
+            if buttons & getattr(curses, "BUTTON4_PRESSED", 0):
+                key = curses.KEY_UP
+            elif buttons & getattr(curses, "BUTTON5_PRESSED", 0):
+                key = curses.KEY_DOWN
+            elif buttons & (curses.BUTTON1_CLICKED | curses.BUTTON1_DOUBLE_CLICKED):
+                action, clicked = mouse_hit_test(page, *win.getmaxyx(), mx, my)
+                if action == "item":
+                    index = clicked
+                    focus = 0
+                    key = 10  # Clicking an entry is equivalent to selecting it.
+                elif action == "ok":
+                    focus = 1
+                    key = ord("y") if page == "TRADING SWITCH" else 10
+                elif action == "cancel":
+                    focus = 2
+                    key = ord("n") if page == "TRADING SWITCH" else 10
+                elif action == "input":
+                    focus = 0
+                    continue
+                else:
+                    continue
+            else:
+                continue
         if not visible:
             if key == 27: return
             continue
@@ -293,6 +381,10 @@ def start(win):
                     note = "Enter a positive whole-rupee amount"
             elif key == 27: page = "CONTROL CENTER"; index = 1; focus = 0
         elif page == "TRADING SWITCH":
+            if key == 9: focus = (focus + 1) % 3
+            elif key == curses.KEY_BTAB: focus = (focus - 1) % 3
+            elif key in ENTER and focus == 1: key = ord("y")
+            elif key in ENTER and focus == 2: key = ord("n")
             if key in (ord("Y"), ord("y")):
                 if saved.get("amo_enabled"):
                     _, problem = backend("off")
