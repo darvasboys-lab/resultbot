@@ -3,6 +3,7 @@
 from __future__ import annotations
 import curses
 import json
+import math
 import subprocess
 from pathlib import Path
 try:
@@ -521,15 +522,18 @@ def start(win):
                 if focus == 2 or index == 4:
                     page = "CONTROL CENTER"; index = 2; focus = 0
                 elif index == 3:
-                    oco_editor = {
-                        "phase": 0,
-                        "stop_pct": str(plan.get("stop_pct", "3")),
-                        "target_pct": str(plan.get("target_pct", "6")),
-                        "input": str(plan.get("stop_pct", "3")),
-                        "fresh": True
-                    }
-                    page = "OCO EDIT"
-                    focus = 0
+                    if plan_error:
+                        note = "OCO SETTINGS UNAVAILABLE: " + plan_error
+                    else:
+                        oco_editor = {
+                            "phase": 0,
+                            "stop_pct": str(plan["stop_pct"]),
+                            "target_pct": str(plan["target_pct"]),
+                            "input": str(plan["stop_pct"]),
+                            "fresh": True
+                        }
+                        page = "OCO EDIT"
+                        focus = 0
                 else:
                     page = ["STRATEGY DOWN", "STRATEGY UP", "STRATEGY REVIEW"][index]
                     if page == "STRATEGY DOWN":
@@ -612,6 +616,67 @@ def start(win):
                     index = 0 if wizard["side"]=="down" else 1
                     wizard = None
                     focus = 0
+        elif page == "OCO EDIT":
+            if key == 27 or (key in ENTER and focus == 2):
+                page = "STRATEGY"
+                index = 3
+                focus = 0
+                oco_editor = None
+            elif key == 9:
+                focus = (focus + 1) % 3
+            elif key == curses.KEY_BTAB:
+                focus = (focus - 1) % 3
+            elif 48 <= key <= 57 or key == ord("."):
+                char = chr(key)
+                if char != "." or "." not in oco_editor["input"] or oco_editor["fresh"]:
+                    oco_editor["input"] = char if oco_editor["fresh"] else oco_editor["input"] + char
+                    oco_editor["input"] = oco_editor["input"][:19]
+                    oco_editor["fresh"] = False
+                    focus = 0
+            elif key in (8, 127, curses.KEY_BACKSPACE):
+                oco_editor["input"] = oco_editor["input"][:-1]
+                oco_editor["fresh"] = False
+                focus = 0
+            elif key in ENTER:
+                try:
+                    value = float(oco_editor["input"])
+                    ceiling = 50 if oco_editor["phase"] == 0 else 100
+                    if not math.isfinite(value) or not 0 < value < ceiling:
+                        raise ValueError("Percentage must be greater than zero and below "+str(ceiling))
+                    slot = "stop_pct" if oco_editor["phase"] == 0 else "target_pct"
+                    oco_editor[slot] = str(value)
+                    if oco_editor["phase"] == 0:
+                        oco_editor["phase"] = 1
+                        oco_editor["input"] = oco_editor["target_pct"]
+                        oco_editor["fresh"] = True
+                    else:
+                        page = "OCO CONFIRM"
+                    focus = 0
+                except ValueError as exc:
+                    note = "INVALID PERCENTAGE: " + str(exc)
+        elif page == "OCO CONFIRM":
+            if key == 27 or (key in ENTER and focus == 2) or key in (ord("n"), ord("N")):
+                page = "STRATEGY"
+                index = 3
+                focus = 0
+                oco_editor = None
+            elif key == 9:
+                focus = (focus + 1) % 3
+            elif key == curses.KEY_BTAB:
+                focus = (focus - 1) % 3
+            elif key in ENTER or key in (ord("y"), ord("Y")):
+                _, problem = strategy_backend(
+                    "set-oco", "--sl-pct", oco_editor["stop_pct"],
+                    "--target-pct", oco_editor["target_pct"]
+                )
+                if problem:
+                    note = "OCO SETTINGS NOT SAVED: " + problem
+                else:
+                    note = "OCO % settings saved (TEST PLAN, no broker OCO placed)"
+                    page = "STRATEGY"
+                    index = 3
+                    focus = 0
+                    oco_editor = None
         elif page == "STRATEGY REVIEW":
             if key in ENTER or key == 27:
                 page = "STRATEGY"; index = 2; focus = 0
