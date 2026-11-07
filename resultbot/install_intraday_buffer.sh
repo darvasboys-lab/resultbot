@@ -53,7 +53,7 @@ with tempfile.TemporaryDirectory() as scratch:
         assert policy.save_buffer_pct(percent)["buy_buffer_pct"]==str(percent)
     p=policy.calculate_buy_limit(quote_price=100,budget_inr=1000,
                                   tick_size="0.05",buffer_pct=2)
-    assert p["buy_limit_price"]=="102"
+    assert p["buy_limit_price"]=="102.00"
     assert p["whole_shares_affordable_at_limit"]==9
     assert p["broker_order_submitted"] is False
 print("PASS: mouse selection, buffer persistence, limit ceiling and quantity; no Dhan")
