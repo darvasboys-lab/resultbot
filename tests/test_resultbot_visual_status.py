@@ -32,16 +32,16 @@ class TestResultBotStatusPolish(unittest.TestCase):
             self.assertTrue(ui.render(screen, state, "CONTROL CENTER",
                                       [], 0, 0, listener_running=True))
         self.assertTrue(any(
-            call.args[2] == "BOT LISTENING" and call.args[3] == 12
+            call.args[3] == "BOT LISTENING" and call.args[4] == 12
             for call in drawing.call_args_list))
         self.assertTrue(any(
-            call.args[2] == "💵" and call.args[3] == 14
+            call.args[3] == "💵" and call.args[4] == 14
             for call in drawing.call_args_list))
         self.assertTrue(any(
-            call.args[3] == "TRADING AMO" and call.args[4] == "● AMO OFF"
+            call.args[4] == "TRADING AMO" and call.args[5] == "● AMO OFF"
             for call in cards.call_args_list))
         self.assertTrue(any(
-            call.args[3] == "PER ORDER" and call.args[4] == "   ₹1,000"
+            call.args[4] == "PER ORDER" and call.args[5] == "   ₹1,000"
             for call in cards.call_args_list))
 
     def test_unavailable_budget_does_not_draw_cash_icon(self):
@@ -53,7 +53,7 @@ class TestResultBotStatusPolish(unittest.TestCase):
              patch.object(ui.curses, "color_pair", return_value=0):
             ui.render(screen, {"amo_enabled":False}, "CONTROL CENTER",
                       [], 0, 0, listener_running=False)
-        self.assertFalse(any(call.args[2] == "💵"
+        self.assertFalse(any(call.args[3] == "💵"
                              for call in drawing.call_args_list))
 
     def test_listener_status_reads_only_systemctl(self):
