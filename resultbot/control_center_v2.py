@@ -313,6 +313,31 @@ def start(win):
         elif page == "ORDER BUDGET":
             entries = [("INR", "PER-ORDER BUDGET", "Enter any positive whole-rupee amount")]
             selection = -1
+        elif page == "STRATEGY":
+            entries = [
+                ("01", "FALLING PRICE", str(plan.get("down_mode", "Unavailable"))),
+                ("02", "RISING PRICE", str(plan.get("up_mode", "Unavailable"))),
+                ("03", "REVIEW PLAN", "View saved strategy stages"),
+                ("00", "BACK", "Return to main menu"),
+            ]
+            selection = index
+        elif page == "STRATEGY DOWN":
+            entries = [(str(i+1).zfill(2), code, desc)
+                       for i, (code, desc) in enumerate(DOWN_MODES)]
+            selection = index
+        elif page == "STRATEGY UP":
+            entries = [(str(i+1).zfill(2), code, desc)
+                       for i, (code, desc) in enumerate(UP_MODES)]
+            selection = index
+        elif page == "STRATEGY REVIEW":
+            entries = [
+                ("DN", "DOWNSIDE", str(plan.get("down_mode", "?"))),
+                ("UP", "UPSIDE", str(plan.get("up_mode", "?"))),
+                ("SL", "FINAL STOP", str(plan.get("stop_pct", "?")) + "%"),
+                ("TP", "FINAL TARGET", str(plan.get("target_pct", "?")) + "%"),
+                ("!!", "TEST ONLY", "LIVE remains entry-only Equity AMO"),
+            ]
+            selection = -1
         elif page == "TRADING SWITCH":
             desired = "OFF" if saved.get("amo_enabled") else "ON"
             entries = [("!!", "TURN AMO " + desired, "Press Y to confirm; Esc to cancel")]
@@ -367,8 +392,8 @@ def start(win):
             elif key == 9: focus = (focus + 1) % 3
             elif key == curses.KEY_BTAB: focus = (focus - 1) % 3
             elif key in ENTER or key == 32:
-                if focus == 2 or index == 4: return
-                page = ["ALERT SOURCE", "ORDER BUDGET", "TRADING SWITCH", "OVERVIEW"][index]
+                if focus == 2 or index == 5: return
+                page = ["ALERT SOURCE", "ORDER BUDGET", "STRATEGY", "TRADING SWITCH", "OVERVIEW"][index]
                 focus = 0
                 index = 0
                 if page == "ORDER BUDGET":
