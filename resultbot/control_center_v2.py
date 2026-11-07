@@ -12,8 +12,9 @@ BACKEND = ROOT / "equity_amo_live.py"
 MENU = [
     ("01", "ALERT SOURCE", "Choose Telegram signal groups"),
     ("02", "ORDER BUDGET", "Set investment per order"),
-    ("03", "TRADING SWITCH", "Turn AMO on or off"),
-    ("04", "OVERVIEW", "Settings and order records"),
+    ("03", "STRATEGY PLAN", "Fall/rise management (TEST only)"),
+    ("04", "TRADING SWITCH", "Turn AMO on or off"),
+    ("05", "OVERVIEW", "Settings and order records"),
     ("00", "BACK", "Return to terminal"),
 ]
 SOURCES = [
@@ -21,6 +22,9 @@ SOURCES = [
     ("EARNINGS_PULSE", "Excellent Results channel"),
     ("BOTH", "Both authorized sources"),
 ]
+DOWN_MODES = [("CUT", "Cut losses in stages"), ("AVERAGE", "Average down with shares"), ("STOP_ONLY", "Hold until final stop")]
+UP_MODES = [("TAKE_PROFIT", "Book profits in stages"), ("ADD_UP", "Add as price rises"), ("TARGET_ONLY", "Hold until final target")]
+STRATEGY_BACKEND = ROOT / "position_strategy.py"
 ENTER = (10, 13, curses.KEY_ENTER)
 
 def backend(*args):
@@ -32,6 +36,18 @@ def backend(*args):
         return json.loads(result.stdout), ""
     except (OSError, ValueError, subprocess.TimeoutExpired) as error:
         return {}, str(error)
+
+def strategy_backend(*args):
+    """Read/write the staged TEST-only plan; never Dhan orders."""
+    try:
+        result = subprocess.run([str(PY), str(STRATEGY_BACKEND), *args],
+                                capture_output=True, text=True, timeout=10)
+        if result.returncode:
+            return {}, (result.stderr or result.stdout).strip() or "Plan not saved"
+        return json.loads(result.stdout), ""
+    except (OSError, ValueError, subprocess.TimeoutExpired) as exc:
+        return {}, str(exc)
+
 
 def colors():
     """Blue background, soft-grey dashboard, white cards and yellow focus."""
@@ -90,7 +106,8 @@ def card(win, y, x, width, heading, value, description, value_style=4, compact=F
         draw_text(win, y + 3, x + 2, description, 4, width - 4)
 
 
-def render(win, state, page, entries, selection, focus, note="", amount=""):
+def render(win, state, page, entries, selection, focus, note="", amount="", plan=None):
+    plan = plan or {}
     h, w = win.getmaxyx()
     win.bkgd(" ", curses.color_pair(1))
     win.erase()
