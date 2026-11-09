@@ -145,7 +145,8 @@ def main():
         records = oco.get("protection") or []
         errors = oco.get("unprotected_errors") or []
         active = sum(1 for x in records if isinstance(x, dict) and x.get("state") == "ACTIVE")
-        concern = sum(1 for x in records if isinstance(x, dict) and x.get("state") in ("UNKNOWN", "ERROR", "FAILED"))
+        concern = sum(1 for x in records if isinstance(x, dict) and x.get("state") in
+                      ("UNKNOWN", "ERROR", "FAILED", "REVIEW", "CANCEL_REQUESTED", "SUBMITTING"))
         if errors or concern:
             table_row("Broker OCO records", "REVIEW", f"{active} active; {len(errors) + concern} warnings", "bad")
         elif not oco.get("enabled", False):
@@ -153,7 +154,7 @@ def main():
         elif active:
             table_row("Broker OCO records", f"{active} ACTIVE", "last stored broker verification", "good")
         else:
-            table_row("Broker OCO records", "NONE", "no active protection recorded", "info")
+            table_row("Broker OCO records", "0 OPEN", "no active protection recorded", "good")
     if c:
         pending = c["pending"]
         table_row("Unresolved intents", "CLEAR" if not pending else str(pending) + " REVIEW",
