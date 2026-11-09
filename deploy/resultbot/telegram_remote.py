@@ -169,48 +169,103 @@ def command(args: list[str], timeout: int = 15) -> tuple[bool,str]:
         return False, "Local ResultBot command unavailable or timed out"
 
 
+def format_status_reply(settings: dict | None, services: dict, protection: dict | None) -> str:
+    """Short mobile-first status message; all displayed values are current state.
+
+    OCO counts are last saved guard verification, not a fresh broker order query.
+    An unavailable field is marked UNKNOWN rather than silently treated as OFF.
+    """
+    lines = ["RESULTBOT", ""]
+
+    if isinstance(settings, dict) and isinstance(settings.get("live_enabled"), bool):
+        live_on = settings["live_enabled"]
+        lines.append(("🟢" if live_on else "🔴") + " LIVE: " + ("ON" if live_on else "OFF"))
+    else:
+        lines.append("🟡 LIVE: UNKNOWN")
+
+    if isinstance(settings, dict) and isinstance(settings.get("amo_enabled"), bool):
+        amo_on = settings["amo_enabled"]
+        lines.append(("🔴" if amo_on else "🟢") + " AMO: " + ("ON" if amo_on else "OFF"))
+    else:
+        lines.append("🟡 AMO: UNKNOWN")
+
+    source = settings.get("source") if isinstance(settings, dict) else None
+    if source in ("BOTH", "TEST", "EARNINGS_PULSE"):
+        lines.append("🟢 SOURCES: " + source)
+    else:
+        lines.append("🟡 SOURCES: UNKNOWN")
+
+    budget = settings.get("per_order_budget_inr") if isinstance(settings, dict) else None
+    if type(budget) is int and budget > 0:
+        lines.append("🟢 PER ORDER: ₹" + str(budget))
+    else:
+        lines.append("🟡 PER ORDER: UNKNOWN")
+
+    for label in ("Telegram listener", "OCO Guard", "Token renewal "):
+        state = services.get(label)
+        if state is True:
+            lines.append("🟢 " + label + ": RUNNING")
+        elif state is False:
+            lines.append("🔴 " + label + ": NOT RUNNING")
+        else:
+            lines.append("🟡 " + label + ": UNKNOWN")
+
+    if isinstance(protection, dict):
+        records = protection.get("protection")
+        errors = protection.get("unprotected_errors")
+        if isinstance(records, list) and isinstance(errors, list) and all(
+            isinstance(record, dict) and isinstance(record.get("state"), str)
+            for record in records
+        ):
+            verified_active = sum(record["state"] == "ACTIVE" for record in records)
+            unresolved = sum(record["state"] not in ("ACTIVE", "CLOSED")
+                             for record in records)
+            warnings = unresolved + len(errors)
+            lines.append(("🟢" if warnings == 0 else "🟡") +
+                         f" OCO: {verified_active} verified active, {warnings} warnings")
+        else:
+            lines.append("🟡 OCO: UNKNOWN")
+    else:
+        lines.append("🟡 OCO: UNKNOWN")
+
+    return "\n".join(lines)
+
+
 def status_text():
-    ok, s = command([str(ENTRY), "status-short"], 6)
-    if not ok: return "🔴 ResultBot settings unavailable"
-    live_match = re.search(r"RESULTBOT LIVE:\s*(ON|OFF)", s)
-    amo_match = re.search(r"AMO:\s*(YES|NO)\s*/\s*(ON|OFF)", s)
-    src_match = re.search(r"sources=([A-Z_]+)", s)
-    budget_match = re.search(r"per-order budget INR ([0-9]+)", s)
-    live_on = bool(live_match and live_match.group(1) == "ON")
-    amo_on = bool(amo_match and amo_match.group(2) == "ON")
-    lines = ["🤖 RESULTBOT / TELEGRAM CONTROL",
-             ("🟢" if live_on else "🔴") + (" LIVE: ON" if live_on else " LIVE: OFF"),
-             ("🔴" if amo_on else "🟢") + (" AMO: ON" if amo_on else " AMO: OFF"),
-             "📡 SOURCES: " + (src_match.group(1) if src_match else "?"),
-             "💰 PER ORDER: ₹" + (budget_match.group(1) if budget_match else "?")]
-    for label, service in [
-        ("Telegram signal listener","resultbot-excellent-watch.service"),
-        ("OCO Guard","resultbot-oco-guard.service"),
-        ("Token renewal timer","resultbot-dhan-token-refresh.timer")
-    ]:
+    """Read only ResultBot settings, service health, and last OCO guard state."""
+    ok, raw = command([str(ENTRY), "settings", "--show"], 7)
+    settings = None
+    if ok:
         try:
-            proc = subprocess.run(["systemctl", "--user", "is-active", service],
-                                  capture_output=True, text=True, timeout=3)
-            running = proc.returncode == 0 and proc.stdout.strip() == "active"
+            settings = json.loads(raw)
+        except (ValueError, TypeError):
+            pass
+
+    services = {}
+    for label, service in (
+        ("Telegram listener", "resultbot-excellent-watch.service"),
+        ("OCO Guard", "resultbot-oco-guard.service"),
+        ("Token renewal ", "resultbot-dhan-token-refresh.timer"),
+    ):
+        try:
+            proc = subprocess.run(
+                ["systemctl", "--user", "is-active", service],
+                capture_output=True, text=True, timeout=3
+            )
+            services[label] = proc.returncode == 0 and proc.stdout.strip() == "active"
         except (OSError, subprocess.TimeoutExpired):
-            running = False
-        lines.append(("🟢 " if running else "🔴 ") + label +
-                     (": RUNNING" if running else ": NOT RUNNING"))
+            services[label] = None
+
+    protection = None
     if OCO.is_file():
         ok, raw = command([str(OCO), "status"], 7)
         if ok:
             try:
-                d = json.loads(raw)
-                active = sum(p.get("state") == "ACTIVE" for p in d.get("protection", []))
-                warnings = len(d.get("unprotected_errors", [])) + sum(
-                    p.get("state") in ("UNKNOWN","REVIEW","ERROR","SUBMITTING","CANCEL_REQUESTED")
-                    for p in d.get("protection", []))
-                lines.append(("🟢" if not warnings else "🟡") +
-                             f" OCO: {active} verified active, {warnings} warnings (last guard check)")
-            except (ValueError,TypeError,AttributeError):
-                lines.append("🟡 OCO state unreadable")
-    return "\n".join(lines)
+                protection = json.loads(raw)
+            except (ValueError, TypeError):
+                pass
 
+    return format_status_reply(settings, services, protection)
 
 def orders_text():
     ok, raw = command([str(ENTRY), "status"], 7)
@@ -561,7 +616,33 @@ def self_test():
     assert kb["keyboard"][4][1]["style"] == "success"
     assert BUTTON_COMMANDS["📊 STATUS"] == "status"
     assert propose(BUTTON_COMMANDS["🔴 AMO ON"])[0] == ("arm",)
-    print("PASS: command allowlist, confirmation routing, and large Telegram keyboard")
+
+    healthy = format_status_reply(
+        {"live_enabled": True, "amo_enabled": False,
+         "source": "BOTH", "per_order_budget_inr": 25},
+        {"Telegram listener": True, "OCO Guard": True, "Token renewal ": True},
+        {"protection": [], "unprotected_errors": []}
+    )
+    assert healthy == (
+        "RESULTBOT\\n\\n🟢 LIVE: ON\\n🟢 AMO: OFF\\n🟢 SOURCES: BOTH"
+        "\\n🟢 PER ORDER: ₹25\\n🟢 Telegram listener: RUNNING"
+        "\\n🟢 OCO Guard: RUNNING\\n🟢 Token renewal : RUNNING"
+        "\\n🟢 OCO: 0 verified active, 0 warnings"
+    ).replace("\\n", "\n")
+    problematic = format_status_reply(
+        {"live_enabled": False, "amo_enabled": True,
+         "source": "TEST", "per_order_budget_inr": 1000},
+        {"Telegram listener": False, "OCO Guard": True, "Token renewal ": None},
+        {"protection": [{"state": "UNKNOWN"}],
+         "unprotected_errors": [{"message": "Broker check pending"}]}
+    )
+    assert "🔴 LIVE: OFF" in problematic
+    assert "🔴 AMO: ON" in problematic
+    assert "🟡 OCO: 0 verified active, 2 warnings" in problematic
+    assert "🟡 Token renewal : UNKNOWN" in problematic
+    unknown = format_status_reply(None, {}, None)
+    assert "🟡 LIVE: UNKNOWN" in unknown and "🟡 OCO: UNKNOWN" in unknown
+    print("PASS: command allowlist, keyboard and dynamic status reply format")
 
 
 def main():
