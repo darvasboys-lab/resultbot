@@ -35,7 +35,7 @@ class RegularEntryTests(unittest.TestCase):
         self.stack.enter_context(patch.object(m.watch,'configured_log_group_id',return_value=10))
         self.stack.enter_context(patch.object(m.watch,'configured_test_group_id',return_value=11))
         self.post=self.patch('_dhan_http',return_value={'orderId':'123456789','orderStatus':'PENDING'})
-        self.detail=self.stack.enter_context(patch.object(m.dh,'get_json',side_effect=self.order_detail))
+        self.detail=self.stack.enter_context(patch.object(m.dh,'find_owned_order',side_effect=self.order_detail))
         m.update_settings(source='BOTH',budget=25)
     def patch(self,name,*args,**kw):
         return self.stack.enter_context(patch.object(m,name,*args,**kw))

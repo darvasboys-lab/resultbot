@@ -608,7 +608,7 @@ def _broker_card(intent:dict,summary:str) -> str:
 def _verify_owned_order(intent:dict,token:str) -> dict:
     if not re.fullmatch(r"[0-9]{6,25}",intent["order_id"]):
         raise LiveAmoError("No valid Dhan order ID recorded")
-    order=dh.get_json("/orders/"+intent["order_id"],token)
+    order=dh.find_owned_order(intent["account"],token,intent["order_id"])
     if not isinstance(order,dict):
         raise LiveAmoError("Broker order detail unavailable")
     expected={

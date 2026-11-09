@@ -613,17 +613,29 @@ def do_trades(account: str, token: str, limit: int) -> None:
     print("NOTE: These are real Dhan trades, but not automatically ResultBot trades.")
 
 
+def find_owned_order(account: str, token: str, order_id: str) -> dict:
+    """Select exactly one matching, account-bound record from the broker order book."""
+    rows=get_json("/orders",token)
+    if not isinstance(rows,list):
+        raise DhanReadError("Dhan order book is not a list")
+    matches=[r for r in rows if isinstance(r,dict) and str(r.get("orderId"))==order_id]
+    if len(matches)!=1:
+        raise DhanReadError("Order not uniquely present in today's Dhan order book")
+    row=matches[0]
+    if str(row.get("dhanClientId") or "")!=account:
+        raise DhanReadError("Dhan order account mismatch")
+    return row
+
+
 def do_order(account: str, token: str, order_id: str) -> None:
     verified_profile(account, token)
-    row = get_json("/orders/" + order_id, token)
-    if not isinstance(row, dict) or str(row.get("dhanClientId") or "") != account:
-        raise DhanReadError("Order data malformed or belongs to another account")
-    status, filled, avg = fill_info(row)
+    row=find_owned_order(account,token,order_id)
+    status, filled, avg=fill_info(row)
     print("Dhan order status (read-only)")
-    print("Symbol:", symbol_name(row))
-    print("Broker order status:", status)
-    print("Filled / total:", filled)
-    print("Broker average traded price:", avg)
+    print("Symbol:",symbol_name(row))
+    print("Broker order status:",status)
+    print("Filled / total:",filled)
+    print("Broker average traded price:",avg)
     print("Do not equate this order to a Telegram alert without a verified correlation.")
 
 
