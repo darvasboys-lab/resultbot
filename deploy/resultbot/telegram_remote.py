@@ -142,8 +142,8 @@ def command(args: list[str], timeout: int = 15) -> tuple[bool,str]:
 def status_text():
     ok, s = command([str(ENTRY), "status-short"], 6)
     if not ok: return "🔴 ResultBot settings unavailable"
-    live_match = re.search(r"RESULTBOT LIVE:\\s*(ON|OFF)", s)
-    amo_match = re.search(r"AMO:\\s*(YES|NO)\\s*/\\s*(ON|OFF)", s)
+    live_match = re.search(r"RESULTBOT LIVE:\s*(ON|OFF)", s)
+    amo_match = re.search(r"AMO:\s*(YES|NO)\s*/\s*(ON|OFF)", s)
     src_match = re.search(r"sources=([A-Z_]+)", s)
     budget_match = re.search(r"per-order budget INR ([0-9]+)", s)
     live_on = bool(live_match and live_match.group(1) == "ON")
