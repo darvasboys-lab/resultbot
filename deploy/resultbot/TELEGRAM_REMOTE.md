@@ -40,6 +40,19 @@ account. The bot replies with the menu. Only that Telegram user ID **and**
 this exact group ID can issue ResultBot commands. Anonymous-admin group posts
 cannot be used to bind; post as your own Telegram account.
 
+## Large mobile keyboard
+
+The main panel uses a **persistent Telegram reply keyboard** with six rows
+and two columns where practical. To remain functional in groups with BotFather
+Privacy Mode ON, each button sends an explicit `/rb@BotUsername ...`
+command. The Telegram mobile client controls the exact keyboard height; this
+approximates the lower portion of the screen and can be collapsed by the user.
+
+The inline **CONFIRM / CANCEL** buttons remain on each state-changing
+confirmation message. To deploy to an existing paired bot, update the
+`telegram_remote.py` file with the latest branch and run its `install`
+command again; the stored pairing and group binding are preserved.
+
 ## Commands in bound group
 
 - `/rb`, `/rb help`, `/rb status`, `/rb setup`
