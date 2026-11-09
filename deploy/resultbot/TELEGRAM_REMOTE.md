@@ -43,10 +43,15 @@ cannot be used to bind; post as your own Telegram account.
 ## Large mobile keyboard
 
 The main panel uses a **persistent Telegram reply keyboard** with six rows
-and two columns where practical. To remain functional in groups with BotFather
-Privacy Mode ON, each button sends an explicit `/rb@BotUsername ...`
-command. The Telegram mobile client controls the exact keyboard height; this
-approximates the lower portion of the screen and can be collapsed by the user.
+and two columns where practical. Every button has a short readable label such as
+**📊 STATUS**, **💰 FUNDS** or **🟢 AMO OFF**, not a raw command string.
+Button presses send that text message, which the bot maps to an allowlisted
+action only for the paired user in the bound group. The Telegram mobile client
+controls the exact keyboard height; it can also be hidden by the user.
+In Telegram groups with Privacy Mode ON, reply keyboard messages normally
+arrive as replies to the bot's own keyboard message, but if taps do not reach
+the bot, use /setprivacy via BotFather and re-add the bot to the group.
+Explicit slash commands still work regardless of keyboard display.
 
 The inline **CONFIRM / CANCEL** buttons remain on each state-changing
 confirmation message. To deploy to an existing paired bot, update the
