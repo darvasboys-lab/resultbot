@@ -121,19 +121,21 @@ BUTTON_COMMANDS = {
 
 
 def menu(cfg: dict):
-    """Large persistent Telegram reply keyboard with clean human labels.
+    """Large persistent Telegram reply keyboard with concise visible labels.
 
-    Button texts are matched against the allowlist below, never executed
-    as arbitrary shell commands. Telegram controls actual height.
+    Telegram clients that support KeyboardButton.style display colored keys;
+    older clients simply show their native key styling.
     """
+    def key(label: str, style: str = "primary"):
+        return {"text": label, "style": style}
     return {
         "keyboard": [
-            ["📊 STATUS", "🧾 ORDERS"],
-            ["💰 FUNDS", "🛡️ OCO"],
-            ["⚙️ SETTINGS", "📋 LOGS"],
-            ["🟢 LIVE ON", "🔴 LIVE OFF"],
-            ["🔴 AMO ON", "🟢 AMO OFF"],
-            ["⏹️ STOP BOTH"],
+            [key("📊 STATUS"), key("🧾 ORDERS")],
+            [key("💰 FUNDS"), key("🛡️ OCO")],
+            [key("⚙️ SETTINGS"), key("📋 LOGS")],
+            [key("🟢 LIVE ON", "success"), key("🔴 LIVE OFF", "danger")],
+            [key("🔴 AMO ON", "danger"), key("🟢 AMO OFF", "success")],
+            [key("⏹️ STOP BOTH", "danger")],
         ],
         "resize_keyboard": False,
         "one_time_keyboard": False,
@@ -554,8 +556,9 @@ def self_test():
     kb = menu({"bot_username": "Terminalresultbot"})
     assert kb["is_persistent"] and kb["resize_keyboard"] is False
     assert len(kb["keyboard"]) == 6 and len(kb["keyboard"][0]) == 2
-    assert all(button in BUTTON_COMMANDS
+    assert all(button["text"] in BUTTON_COMMANDS
                for group in kb["keyboard"] for button in group)
+    assert kb["keyboard"][4][1]["style"] == "success"
     assert BUTTON_COMMANDS["📊 STATUS"] == "status"
     assert propose(BUTTON_COMMANDS["🔴 AMO ON"])[0] == ("arm",)
     print("PASS: command allowlist, confirmation routing, and large Telegram keyboard")
