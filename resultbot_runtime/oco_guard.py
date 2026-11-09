@@ -202,7 +202,7 @@ def process(item,orders,trades,positions,forever,token):
             oid=str(f.get('orderId'))
             if oid not in known: raise GuardError('Existing unmanaged OCO/SELL; no overlapping OCO submitted')
             if oid not in seen: reserved+=known[oid]['quantity'];seen.add(oid)
-        uncertain=list(c.execute("SELECT payload FROM coverage WHERE state!='ACTIVE'"))
+        uncertain=list(c.execute("SELECT payload FROM coverage WHERE state NOT IN ('ACTIVE','CLOSED')"))
         if any(json.loads(r[0])['securityId']==item['security_id'] for r in uncertain):
             raise GuardError('Unresolved protection for same security')
         delta=qty-through
