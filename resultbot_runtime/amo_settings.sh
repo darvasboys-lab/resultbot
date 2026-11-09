@@ -81,10 +81,23 @@ notice() {
     fi
 }
 
+source_display_name() {
+    # Display-only labels for verified Telegram sources; routing remains unchanged.
+    local current
+    current="$(get_setting source 2>/dev/null)" || current="UNKNOWN"
+    case "$current" in
+        BOTH) printf 'Earnings Pulse + Owner Test Group' ;;
+        EARNINGS_PULSE) printf 'Earnings Pulse' ;;
+        TEST) printf 'Owner Test Group' ;;
+        *) printf 'Source unavailable' ;;
+    esac
+}
+
 select_menu() {
-    # Never cache the menu's per-order amount; always reload the live saved value.
-    local display_amount
+    # Refresh from saved settings each time, including after source/budget edits.
+    local display_amount display_sources
     display_amount="$(get_setting per_order_budget_inr 2>/dev/null)" || display_amount="UNAVAILABLE"
+    display_sources="$(source_display_name)"
     if [[ -t 0 ]] && command -v whiptail >/dev/null 2>&1; then
         whiptail --title "RESULTBOT  |  SETTINGS" \
           --menu "SAVED PER-ORDER AMOUNT: INR $display_amount
@@ -92,7 +105,7 @@ select_menu() {
 Choose a setting below. Changes apply to future signals.
 Existing orders remain unchanged." \
           19 84 6 \
-          "1" "ALERT SOURCE     Choose which Telegram groups to follow" \
+          "1" "ALERT SOURCES    $display_sources" \
           "2" "ORDER BUDGET     Set your investment per order" \
           "3" "TRADING SWITCH   Turn AMO on or off" \
           "4" "OVERVIEW         View settings and order records" \
@@ -100,7 +113,7 @@ Existing orders remain unchanged." \
           3>&1 1>&2 2>&3
     else
         echo >&2
-        echo "1) Edit alert source" >&2
+        echo "1) Alert sources: $display_sources" >&2
         echo "2) Edit per-order budget" >&2
         echo "3) Turn AMO YES / NO" >&2
         echo "4) View current settings and order intents" >&2
@@ -125,7 +138,7 @@ edit_source() {
             17 85 3 \
             "TEST" "Owner-only authorized Test Group" "$a" \
             "EARNINGS_PULSE" "Official Excellent Results channel" "$b" \
-            "BOTH" "Both authorized sources" "$c" \
+            "BOTH" "Earnings Pulse + Owner Test Group" "$c" \
             3>&1 1>&2 2>&3)"; then
             echo "Source change cancelled."
             return
@@ -133,7 +146,7 @@ edit_source() {
     else
         echo "1) TEST only (owner Test Group)"
         echo "2) EARNINGS_PULSE only (official live alerts)"
-        echo "3) BOTH sources"
+        echo "3) BOTH (Earnings Pulse + Owner Test Group)"
         local choice
         read -r -p "Select source [1/2/3]: " choice
         case "$choice" in
