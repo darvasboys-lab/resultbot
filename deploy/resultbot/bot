@@ -17,7 +17,7 @@ help_menu() {
   echo "============================================"
   echo "          RESULTBOT COMMAND CENTER"
   echo "============================================"
-  echo " bot status  - AMO and service status"
+  echo " bot status  - Colorized read-only health dashboard"
   echo " bot setup   - Edit settings and YES/NO"
   echo " bot orders  - View real AMO orders"
   echo " bot funds   - Check live Dhan balance"
@@ -29,16 +29,8 @@ help_menu() {
 }
 
 case "${1:-help}" in
-  status)
-    echo "===== RESULTBOT STATUS ====="
-    "$PY" "$D/equity_amo_live.py" status-short
-    echo
-    echo "Telegram listener:"
-    systemctl --user is-active \
-      resultbot-excellent-watch.service || true
-    echo "Dhan token refresh timer:"
-    systemctl --user is-active \
-      resultbot-dhan-token-refresh.timer || true
+  status|sttaus)
+    exec "$PY" "$HOME/.local/share/resultbot/status_dashboard.py"
     ;;
 
   setup)
