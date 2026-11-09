@@ -134,7 +134,7 @@ def command(args: list[str], timeout: int = 15) -> tuple[bool,str]:
                               cwd=str(Path.home() / "uditbot"))
         # Only purpose-built ResultBot commands may be invoked.
         output = proc.stdout.strip() if proc.returncode == 0 else proc.stderr.strip()
-        return proc.returncode == 0, output[:2300] or "No output"
+        return proc.returncode == 0, output[:50000] or "No output"
     except (OSError, subprocess.TimeoutExpired):
         return False, "Local ResultBot command unavailable or timed out"
 
@@ -304,7 +304,8 @@ def execute_confirmed(action:tuple[str,...]):
     if not ok:
         return "🔴 CHANGE NOT APPLIED\n"+raw[-400:]
     # Re-read canonical state; no order IDs or tokens included.
-    return "🟢 COMMAND ACCEPTED\n"+settings_text()+"\n"+status_text().splitlines()[1]
+    current = status_text().splitlines()
+    return "🟢 COMMAND ACCEPTED\n"+settings_text()+("\n"+current[1] if len(current)>1 else "")
 
 
 def is_authorized(cfg, chat:int, sender:int) -> bool:
@@ -432,7 +433,7 @@ def serve():
                     handle_message(current,u["message"])
                 elif isinstance(u.get("callback_query"),dict):
                     handle_callback(current,u["callback_query"])
-        except (RemoteError,ValueError,KeyError,TypeError,OSError) as exc:
+        except Exception as exc:
             # Log error CLASS only; never Telegram token or account credentials.
             print("Telegram remote retry:",type(exc).__name__,flush=True)
             time.sleep(5)
