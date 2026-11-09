@@ -18,6 +18,10 @@ SRC_MOD = Path(__file__).with_name("oco_manual_exit.py")
 
 MODS = [
 (
+'''        uncertain=list(c.execute("SELECT payload FROM coverage WHERE state!='ACTIVE'"))''',
+'''        uncertain=list(c.execute("SELECT payload FROM coverage WHERE state NOT IN ('ACTIVE','CLOSED')"))'''
+),
+(
 """    allowed={'GET':{'/orders','/trades','/positions','/forever/orders'},'POST':{'/forever/orders'}}
     if path not in allowed.get(method,set()): raise GuardError('Unsupported OCO endpoint')""",
 """    allowed={'GET':{'/orders','/trades','/positions','/holdings','/forever/orders'},'POST':{'/forever/orders'}}
