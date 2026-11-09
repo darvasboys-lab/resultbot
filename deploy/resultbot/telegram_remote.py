@@ -87,7 +87,9 @@ def send(cfg: dict, chat_id: int, content: str, buttons: list | None = None):
     payload = {"chat_id": chat_id, "text": str(content)[:3900],
                "disable_web_page_preview": True}
     if buttons:
-        payload["reply_markup"] = {"inline_keyboard": buttons}
+        payload["reply_markup"] = (
+            buttons if isinstance(buttons, dict) else {"inline_keyboard": buttons}
+        )
     api(cfg["bot_token"], "sendMessage", payload)
 
 
@@ -103,15 +105,30 @@ def row(*pairs):
     return [{"text": title, "callback_data": key} for title,key in pairs]
 
 
-def menu():
-    return [
-        row(("📊 Status","q:status"),("🧾 Orders","q:orders")),
-        row(("💰 Funds","q:funds"),("🛡️ OCO","q:oco")),
-        row(("⚙️ Settings","q:setup"),("📋 Logs","q:logs")),
-        row(("LIVE ON","a:live-on"),("LIVE OFF","a:live-off")),
-        row(("AMO ON","a:amo-on"),("AMO OFF","a:amo-off")),
-        row(("STOP BOTH","a:stop")),
-    ]
+def menu(cfg: dict):
+    """Persistent, full-size Telegram reply keyboard replacing the phone keyboard.
+
+    Commands explicitly address this bot so they arrive in group Privacy Mode.
+    Telegram controls exact pixel height and whether the user hides the keyboard.
+    """
+    username = str(cfg.get("bot_username") or "")
+    if not re.fullmatch(r"[A-Za-z][A-Za-z0-9_]{4,31}", username):
+        raise RemoteError("Bot username unavailable; cannot address group commands")
+    prefix = "/rb@" + username
+    return {
+        "keyboard": [
+            [prefix + " status", prefix + " orders"],
+            [prefix + " funds", prefix + " oco"],
+            [prefix + " setup", prefix + " logs"],
+            [prefix + " live on", prefix + " live off"],
+            [prefix + " amo on", prefix + " amo off"],
+            [prefix + " stop"],
+        ],
+        "resize_keyboard": False,
+        "one_time_keyboard": False,
+        "is_persistent": True,
+        "input_field_placeholder": "ResultBot • Tap a control below",
+    }
 
 
 HELP = (
@@ -361,21 +378,21 @@ def handle_message(cfg:dict, m:dict):
             safe_save(CONF,cfg)
             send(cfg,chat_id,"🟢 THIS GROUP IS NOW THE RESULTBOT CONTROL CENTER.\n"
                  "Only the paired Telegram account can issue commands.\nType /rb or use the menu.",
-                 menu())
+                 menu(cfg))
         return
 
     if not is_authorized(cfg,chat_id,uid):
         return
     if sub in ("help","menu","start"):
-        send(cfg,chat_id,HELP,menu())
+        send(cfg,chat_id,HELP,menu(cfg))
     elif sub in READ_ACTIONS and len(items)==1:
-        send(cfg,chat_id,READ_ACTIONS[sub](),menu())
+        send(cfg,chat_id,READ_ACTIONS[sub](),menu(cfg))
     else:
         proposal=propose(args)
         if proposal:
             new_confirmation(cfg,chat_id,uid,*proposal)
         else:
-            send(cfg,chat_id,"Unknown command.\n"+HELP,menu())
+            send(cfg,chat_id,"Unknown command.\n"+HELP,menu(cfg))
 
 
 def handle_callback(cfg:dict, q:dict):
@@ -392,7 +409,7 @@ def handle_callback(cfg:dict, q:dict):
     if data.startswith("q:"):
         key=data[2:]
         answer(cfg,qid)
-        if key in READ_ACTIONS: send(cfg,chat,READ_ACTIONS[key](),menu())
+        if key in READ_ACTIONS: send(cfg,chat,READ_ACTIONS[key](),menu(cfg))
         return
     if data.startswith("a:"):
         action=data[2:]
@@ -409,10 +426,10 @@ def handle_callback(cfg:dict, q:dict):
             return
         if data.startswith("x:"):
             answer(cfg,qid,"Cancelled")
-            send(cfg,chat,"Change cancelled. Nothing modified.",menu())
+            send(cfg,chat,"Change cancelled. Nothing modified.",menu(cfg))
         else:
             answer(cfg,qid,"Processing")
-            send(cfg,chat,execute_confirmed(record[3]),menu())
+            send(cfg,chat,execute_confirmed(record[3]),menu(cfg))
 
 
 def serve():
@@ -522,7 +539,12 @@ def self_test():
     assert propose("budget 0") is None
     assert propose("shell ls") is None
     assert propose("cancel 1") is None
-    print("PASS: command allowlist and confirmation-routing tests")
+    kb = menu({"bot_username": "Terminalresultbot"})
+    assert kb["is_persistent"] and kb["resize_keyboard"] is False
+    assert len(kb["keyboard"]) == 6 and len(kb["keyboard"][0]) == 2
+    assert all(button.startswith("/rb@Terminalresultbot ")
+               for group in kb["keyboard"] for button in group)
+    print("PASS: command allowlist, confirmation routing, and large Telegram keyboard")
 
 
 def main():
