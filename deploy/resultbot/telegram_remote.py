@@ -105,29 +105,40 @@ def row(*pairs):
     return [{"text": title, "callback_data": key} for title,key in pairs]
 
 
-def menu(cfg: dict):
-    """Persistent, full-size Telegram reply keyboard replacing the phone keyboard.
+BUTTON_COMMANDS = {
+    "📊 STATUS": "status",
+    "🧾 ORDERS": "orders",
+    "💰 FUNDS": "funds",
+    "🛡️ OCO": "oco",
+    "⚙️ SETTINGS": "setup",
+    "📋 LOGS": "logs",
+    "🟢 LIVE ON": "live on",
+    "🔴 LIVE OFF": "live off",
+    "🔴 AMO ON": "amo on",
+    "🟢 AMO OFF": "amo off",
+    "⏹️ STOP BOTH": "stop",
+}
 
-    Commands explicitly address this bot so they arrive in group Privacy Mode.
-    Telegram controls exact pixel height and whether the user hides the keyboard.
+
+def menu(cfg: dict):
+    """Large persistent Telegram reply keyboard with clean human labels.
+
+    Button texts are matched against the allowlist below, never executed
+    as arbitrary shell commands. Telegram controls actual height.
     """
-    username = str(cfg.get("bot_username") or "")
-    if not re.fullmatch(r"[A-Za-z][A-Za-z0-9_]{4,31}", username):
-        raise RemoteError("Bot username unavailable; cannot address group commands")
-    prefix = "/rb@" + username
     return {
         "keyboard": [
-            [prefix + " status", prefix + " orders"],
-            [prefix + " funds", prefix + " oco"],
-            [prefix + " setup", prefix + " logs"],
-            [prefix + " live on", prefix + " live off"],
-            [prefix + " amo on", prefix + " amo off"],
-            [prefix + " stop"],
+            ["📊 STATUS", "🧾 ORDERS"],
+            ["💰 FUNDS", "🛡️ OCO"],
+            ["⚙️ SETTINGS", "📋 LOGS"],
+            ["🟢 LIVE ON", "🔴 LIVE OFF"],
+            ["🔴 AMO ON", "🟢 AMO OFF"],
+            ["⏹️ STOP BOTH"],
         ],
         "resize_keyboard": False,
         "one_time_keyboard": False,
         "is_persistent": True,
-        "input_field_placeholder": "ResultBot • Tap a control below",
+        "input_field_placeholder": "ResultBot • Tap a button",
     }
 
 
@@ -342,7 +353,8 @@ def is_authorized(cfg, chat:int, sender:int) -> bool:
 def handle_message(cfg:dict, m:dict):
     text=str(m.get("text") or "").strip()
     match=re.fullmatch(r"/rb(?:@\w+)?(?:\s+(.+))?",text,re.I|re.S)
-    if not match:
+    button_command = BUTTON_COMMANDS.get(text)
+    if not match and button_command is None:
         return
     timestamp=int(m.get("date") or 0)
     if abs(time.time()-timestamp) > MAX_MESSAGE_AGE:
@@ -353,7 +365,7 @@ def handle_message(cfg:dict, m:dict):
     uid=user.get("id")
     if not isinstance(chat_id,int) or not isinstance(uid,int) or user.get("is_bot"):
         return
-    args=(match.group(1) or "").strip()
+    args=(match.group(1) or "").strip() if match else button_command
     items=args.split()
     sub=items[0].lower() if items else "menu"
 
@@ -542,8 +554,10 @@ def self_test():
     kb = menu({"bot_username": "Terminalresultbot"})
     assert kb["is_persistent"] and kb["resize_keyboard"] is False
     assert len(kb["keyboard"]) == 6 and len(kb["keyboard"][0]) == 2
-    assert all(button.startswith("/rb@Terminalresultbot ")
+    assert all(button in BUTTON_COMMANDS
                for group in kb["keyboard"] for button in group)
+    assert BUTTON_COMMANDS["📊 STATUS"] == "status"
+    assert propose(BUTTON_COMMANDS["🔴 AMO ON"])[0] == ("arm",)
     print("PASS: command allowlist, confirmation routing, and large Telegram keyboard")
 
 
