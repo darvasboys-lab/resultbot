@@ -43,6 +43,7 @@ for src in "$ROOT"/resultbot_runtime/*.py "$ROOT"/resultbot_runtime/*.sh; do
 done
 install -m 700 "$ROOT/deploy/resultbot/bot" "$HOME/.local/bin/bot"
 install -m 600 "$ROOT/deploy/resultbot/menu.sh" "$HOME/.local/share/resultbot/menu.sh"
+install -m 600 "$ROOT/deploy/resultbot/status_dashboard.py" "$HOME/.local/share/resultbot/status_dashboard.py"
 "$PY" -m compileall -q "$D" "$ROOT/deploy/resultbot"
 "$PY" "$D/equity_amo_live.py" self-test
 
