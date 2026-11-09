@@ -142,7 +142,17 @@ def command(args: list[str], timeout: int = 15) -> tuple[bool,str]:
 def status_text():
     ok, s = command([str(ENTRY), "status-short"], 6)
     if not ok: return "🔴 ResultBot settings unavailable"
-    lines = ["🤖 RESULTBOT STATUS", s]
+    live_match = re.search(r"RESULTBOT LIVE:\\s*(ON|OFF)", s)
+    amo_match = re.search(r"AMO:\\s*(YES|NO)\\s*/\\s*(ON|OFF)", s)
+    src_match = re.search(r"sources=([A-Z_]+)", s)
+    budget_match = re.search(r"per-order budget INR ([0-9]+)", s)
+    live_on = bool(live_match and live_match.group(1) == "ON")
+    amo_on = bool(amo_match and amo_match.group(2) == "ON")
+    lines = ["🤖 RESULTBOT / TELEGRAM CONTROL",
+             ("🟢" if live_on else "🔴") + (" LIVE: ON" if live_on else " LIVE: OFF"),
+             ("🔴" if amo_on else "🟢") + (" AMO: ON" if amo_on else " AMO: OFF"),
+             "📡 SOURCES: " + (src_match.group(1) if src_match else "?"),
+             "💰 PER ORDER: ₹" + (budget_match.group(1) if budget_match else "?")]
     for label, service in [
         ("Telegram signal listener","resultbot-excellent-watch.service"),
         ("OCO Guard","resultbot-oco-guard.service"),
