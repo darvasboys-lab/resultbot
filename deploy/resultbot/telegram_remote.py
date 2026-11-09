@@ -400,7 +400,7 @@ def execute_confirmed(action:tuple[str,...]):
         return "🔴 CHANGE NOT APPLIED\n"+raw[-400:]
     # Re-read canonical state; no order IDs or tokens included.
     current = status_text().splitlines()
-    return "🟢 COMMAND ACCEPTED\n"+settings_text()+("\n"+current[1] if len(current)>1 else "")
+    return "🟢 COMMAND ACCEPTED\n"+settings_text()+("\n"+current[2] if len(current)>2 else "")
 
 
 def is_authorized(cfg, chat:int, sender:int) -> bool:
@@ -623,12 +623,17 @@ def self_test():
         {"Telegram listener": True, "OCO Guard": True, "Token renewal ": True},
         {"protection": [], "unprotected_errors": []}
     )
-    assert healthy == (
-        "RESULTBOT\\n\\n🟢 LIVE: ON\\n🟢 AMO: OFF\\n🟢 SOURCES: BOTH"
-        "\\n🟢 PER ORDER: ₹25\\n🟢 Telegram listener: RUNNING"
-        "\\n🟢 OCO Guard: RUNNING\\n🟢 Token renewal : RUNNING"
-        "\\n🟢 OCO: 0 verified active, 0 warnings"
-    ).replace("\\n", "\n")
+    assert healthy.splitlines() == [
+        "RESULTBOT", "",
+        "🟢 LIVE: ON",
+        "🟢 AMO: OFF",
+        "🟢 SOURCES: BOTH",
+        "🟢 PER ORDER: ₹25",
+        "🟢 Telegram listener: RUNNING",
+        "🟢 OCO Guard: RUNNING",
+        "🟢 Token renewal : RUNNING",
+        "🟢 OCO: 0 verified active, 0 warnings",
+    ]
     problematic = format_status_reply(
         {"live_enabled": False, "amo_enabled": True,
          "source": "TEST", "per_order_budget_inr": 1000},
