@@ -41,8 +41,10 @@ def whole(value):
     return int(n)
 
 def api(method,path,token,payload=None):
-    allowed={'GET':{'/orders','/trades','/positions','/forever/orders'},'POST':{'/forever/orders'}}
-    if path not in allowed.get(method,set()): raise GuardError('Unsupported OCO endpoint')
+    allowed={'GET':{'/orders','/trades','/positions','/holdings','/forever/orders'},'POST':{'/forever/orders'}}
+    if not (path in allowed.get(method,set()) or
+            (method=='DELETE' and re.fullmatch(r'/forever/orders/[0-9]{6,25}',path))):
+        raise GuardError('Unsupported OCO endpoint')
     req=Request('https://api.dhan.co/v2'+path,
         data=json.dumps(payload).encode() if payload is not None else None,
         method=method,headers={'access-token':token,'Content-Type':'application/json','Accept':'application/json'})
@@ -55,7 +57,8 @@ def api(method,path,token,payload=None):
         raise GuardError('Dhan OCO request failed; no automatic POST retry') from None
     if method=='GET' and (not isinstance(result,list) or any(not isinstance(r,dict) for r in result)):
         raise GuardError('Unexpected '+path+' response; cannot verify coverage')
-    if method=='POST' and not isinstance(result,dict): raise GuardError('Uncertain OCO response')
+    if method in ('POST','DELETE') and not isinstance(result,dict):
+        raise GuardError('Uncertain OCO response')
     return result
 
 @contextmanager
@@ -180,7 +183,8 @@ def process(item,orders,trades,positions,forever,token):
     with db() as c:
         previous=list(c.execute('SELECT * FROM coverage WHERE intent_id=? ORDER BY id',(item['id'],)))
         for row in previous:
-            if row['state']!='REVIEW': reconcile(c,row,forever)
+            if row['state'] not in ('REVIEW','CLOSED','CANCEL_REQUESTED'):
+                reconcile(c,row,forever)
         previous=list(c.execute('SELECT * FROM coverage WHERE intent_id=? ORDER BY id',(item['id'],)))
         if any(r['state']!='ACTIVE' for r in previous): return  # never duplicate an uncertain POST
         through=max((r['filled_through'] for r in previous),default=0)
@@ -247,10 +251,27 @@ def cycle():
         forever=api('GET','/forever/orders',token)
         with db() as c:
             for r in records:
-                if r['state']!='REVIEW': reconcile(c,r,forever)
+                if r['state'] not in ('REVIEW','CLOSED','CANCEL_REQUESTED'):
+                    reconcile(c,r,forever)
+        # Manual-exit reconciliation operates only on verified ResultBot-owned OCOs.
+        # The cleanup module throttles additional broker GET requests to 30s.
+        try:
+            import oco_manual_exit
+            oco_manual_exit.cycle(sys.modules[__name__],account,token,orders,forever)
+        except (GuardError,dh.DhanReadError,ValueError,OSError,ImportError) as exc:
+            LOG.warning('OCO manual-exit cleanup deferred: %s',type(exc).__name__)
         if not candidates:return
         trades=api('GET','/trades',token);positions=api('GET','/positions',token)
         for item in candidates:
+            # A historical filled BUY with no remaining intraday exposure must
+            # never create a fresh OCO after a manually completed square-off.
+            if not any(
+                str(p.get('securityId'))==str(item['security_id']) and
+                p.get('exchangeSegment')=='NSE_EQ' and p.get('productType')=='CNC' and
+                str(p.get('dhanClientId'))==account and
+                number(p.get('netQty',0))>0 for p in positions
+            ):
+                continue
             try:
                 process(item,orders,trades,positions,forever,token)
                 with db() as c: c.execute("DELETE FROM problems WHERE intent_id=?",(item['id'],))
