@@ -76,8 +76,10 @@ def read_control():
         with sqlite3.connect(db_uri, uri=True, timeout=2) as c:
             c.execute("PRAGMA query_only=ON")
             state = c.execute("SELECT live_enabled,armed,source,budget FROM control WHERE id=1").fetchone()
+            # ACKED is broker-acknowledged, not an uncertain/unknown intent.
+            # Report only genuine submission ambiguity and uncertain cancellations.
             pending = c.execute("""SELECT COUNT(*) FROM intents WHERE state IN
-                ('RESERVED','PREPARING','SUBMITTING','UNKNOWN','ACKED','CANCEL_REQUESTED')""").fetchone()[0]
+                ('SUBMITTING','UNKNOWN','CANCEL_REQUESTED')""").fetchone()[0]
             last = c.execute("SELECT symbol,state,broker_status,note FROM intents ORDER BY id DESC LIMIT 1").fetchone()
         if not state:
             return None, "Trading settings missing"
@@ -128,18 +130,13 @@ def main():
         table_row("Trading configuration", "UNAVAILABLE", error, "bad")
     else:
         table_row("LIVE intraday BUY", "ON" if c["live"] else "OFF", "owner trading switch", "good" if c["live"] else "bad")
-        table_row("After-market BUY", "ON" if c["amo"] else "OFF", "AMO switch (independent)", "good" if c["amo"] else "bad")
         table_row("Alert sources", str(c["source"]), "selected Telegram inputs", "good" if c["source"] in ("TEST","EARNINGS_PULSE","BOTH") else "warn")
-        table_row("Per-order budget", "INR " + str(c["budget"]), "whole-share quantity sizing", "info")
+        table_row("Per-order budget", "INR " + str(c["budget"]), "configured per-order setting", "good")
     print(border("├", "┼", "┤"))
     s, lev, detail = unit("resultbot-excellent-watch.service")
     table_row("Excellent signal listener", s, detail, lev)
     s, lev, detail = unit("resultbot-oco-guard.service")
     table_row("Automatic OCO guard", s, detail, lev)
-    s, lev, detail = unit("resultbot-dhan-token-refresh.timer")
-    table_row("Dhan token renewal", s, detail if s == "RUNNING" else "may be manual token mode", lev)
-    s, lev, detail = unit("resultbot-listener.service", user=False)
-    table_row("Raw collector (optional)", s, detail, lev)
     print(border("├", "┼", "┤"))
     oco, oco_error = read_oco()
     if oco_error:
@@ -159,16 +156,20 @@ def main():
             table_row("Broker OCO records", "NONE", "no active protection recorded", "info")
     if c:
         pending = c["pending"]
-        table_row("Unresolved BUY intents", str(pending), "broker reconciliation may be due", "warn" if pending else "good")
-        if c["last"]:
-            symbol, state, broker, note = c["last"]
-            level = "bad" if state in ("BLOCKED", "REJECTED") else "good" if state == "TERMINAL" and broker == "TRADED" else "warn"
-            table_row("Most recent BUY intent", state, f"#{symbol} / {broker or 'no order'}", level)
+        table_row("Unresolved intents", "CLEAR" if not pending else str(pending) + " REVIEW",
+                  "0 uncertain broker submissions" if not pending else "check UNKNOWN / SUBMITTING", "good" if not pending else "warn")
     s, lev, detail = quote_policy()
-    table_row("Yahoo quote age limit", s, detail, lev)
+    table_row("Yahoo quote policy", s, detail, "good" if lev == "info" else lev)
+    print(border("├", "┼", "┤"))
+    if c:
+        table_row("After-market BUY (AMO)", "ON" if c["amo"] else "OFF",
+                  "independent owner switch", "good" if c["amo"] else "bad")
+    else:
+        table_row("After-market BUY (AMO)", "UNKNOWN", "trading settings unavailable", "warn")
     print(border("└", "┴", "┘"))
-    print(styled("  ● Green = running / ON   ", GREEN) + styled("● Red = stopped / OFF   ", RED) + styled("● Yellow = review", YELLOW))
-    print("  OFF can be intentional. RUNNING does not prove broker connectivity.")
+    print(styled("  ● Green = verified ON / running   ", GREEN) + styled("● Red = OFF / stopped   ", RED) + styled("● Yellow = review", YELLOW))
+    print("  ACKED orders are not unresolved intents; this view does not query live broker orders.")
+    print("  OFF can be intentional. Service RUNNING does not prove broker connectivity.")
     print("  Read-only check: no orders sent, settings changed, or services restarted.")
     print()
 
