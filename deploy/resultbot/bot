@@ -1,4 +1,12 @@
 #!/usr/bin/env bash
+# RESULTBOT_REGULAR_ENTRY_COMMANDS_V1
+case "${1:-}" in
+  live-on|live-off|amo-off|stop)
+    action="$1"
+    [[ "$action" == stop ]] && action=stop-all
+    exec "$HOME/uditbot/venv/bin/python" "$HOME/resultbot-data/equity_amo_live.py" "$action"
+    ;;
+esac
 set -uo pipefail
 
 D="$HOME/resultbot-data"

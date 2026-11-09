@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Real Dhan Equity AMO with persistent owner-controlled YES / NO.
+"""Real Dhan equity LIMIT entries with independent regular-session and AMO switches.
 
 While ON, every distinct, eligible, NEW Telegram alert may create its own real
 Equity AMO. No order-count/day limits, one-shot disarm, or 10-minute expiry.
@@ -14,6 +14,7 @@ from contextlib import contextmanager
 import hashlib
 import json
 import math
+import logging
 import os
 import re
 import sqlite3
@@ -104,6 +105,24 @@ def connect_db(path: Path | None = None) -> sqlite3.Connection:
       UNIQUE(source,msg_id)
     );
     """ )
+    # Serialize migrations across listener/CLI processes. Existing intents are AMO.
+    con.execute("BEGIN IMMEDIATE")
+    try:
+        for table, definitions in (
+            ("control", {"live_enabled": "INTEGER NOT NULL DEFAULT 0",
+                         "live_since": "INTEGER NOT NULL DEFAULT 0",
+                         "live_stop_seq": "INTEGER NOT NULL DEFAULT 0"}),
+            ("intents", {"entry_route": "TEXT NOT NULL DEFAULT 'AMO'"}),
+        ):
+            columns={r[1] for r in con.execute("PRAGMA table_info("+table+")")}
+            for name, definition in definitions.items():
+                if name not in columns:
+                    con.execute("ALTER TABLE "+table+" ADD COLUMN "+name+" "+definition)
+        con.execute("COMMIT")
+    except BaseException:
+        con.execute("ROLLBACK")
+        con.close()
+        raise
     return con
 
 
@@ -119,19 +138,19 @@ def managed_db(path: Path | None = None):
 
 def _control(con) -> dict:
     row=con.execute(
-        "SELECT armed,source,budget,expires,armed_since,arm_seq,stop_seq FROM control WHERE id=1"
+        "SELECT armed,source,budget,expires,armed_since,arm_seq,stop_seq,live_enabled,live_since,live_stop_seq FROM control WHERE id=1"
     ).fetchone()
-    return dict(zip(("armed","source","budget","expires","armed_since","arm_seq","stop_seq"),row))
+    return dict(zip(("armed","source","budget","expires","armed_since","arm_seq","stop_seq","live_enabled","live_since","live_stop_seq"),row))
 
 
 def status() -> dict:
     with managed_db() as con:
         ctrl=_control(con)
         rows=con.execute("""SELECT id,symbol,state,order_id,broker_status,qty,price,
-             created_ts,note,cancel_after FROM intents ORDER BY id DESC""").fetchall()
+             created_ts,note,cancel_after,entry_route FROM intents ORDER BY id DESC""").fetchall()
         ctrl["orders"]=[dict(zip(
             ("id","symbol","state","order_id","broker_status","qty","price",
-             "created_ts","note","cancel_after"),r)) for r in rows]
+             "created_ts","note","cancel_after","entry_route"),r)) for r in rows]
         ctrl["effective_on"]=bool(ctrl["armed"])
         ctrl["active_orders"]=con.execute(
             "SELECT COUNT(*) FROM intents WHERE state IN "
@@ -144,7 +163,8 @@ def status_short() -> str:
     """Human-readable persistent owner switch, avoiding a large order-history dump."""
     data=status()
     mode="YES / ON" if data["effective_on"] else "NO / OFF"
-    return ("RESULTBOT EQUITY AMO: "+mode+
+    return ("RESULTBOT LIVE: "+("ON" if data["live_enabled"] else "OFF")+
+            " | AMO: "+mode+
             " | sources="+data["source"]+
             " | per-order budget INR "+str(data["budget"])+
             " | unresolved broker intents="+str(data["active_orders"]))
@@ -168,6 +188,8 @@ def editable_settings() -> dict:
         c=_control(con)
     return {
         "amo_enabled": bool(c["armed"]),
+        "live_enabled": bool(c["live_enabled"]),
+        "live_product_type": "CNC",
         "source": c["source"],
         "per_order_budget_inr": int(c["budget"]),
         "budget_min_inr": 1,
@@ -270,10 +292,63 @@ def arm(*, source: str = "BOTH", budget: int = BUDGET_DEFAULT) -> dict:
 
 
 def disarm() -> dict:
+    """Legacy AMO OFF remains independent of regular-session entries."""
+    amo_off()
+    return status()
+
+
+def stop_all() -> dict:
     with managed_db() as con:
         # An explicit owner OFF invalidates already-reserved pre-submit intents.
-        con.execute("UPDATE control SET armed=0,expires=0,stop_seq=stop_seq+1 WHERE id=1")
+        con.execute("UPDATE control SET armed=0,live_enabled=0,expires=0,stop_seq=stop_seq+1,live_stop_seq=live_stop_seq+1 WHERE id=1")
     return status()
+
+
+def set_live(enabled: bool) -> dict:
+    """Owner-controlled regular-session entries; never submits an order itself."""
+    if enabled:
+        if not trading_service_stopped():
+            raise LiveAmoError("Original trading_bot.service must remain inactive and disabled")
+        saved=editable_settings()
+        if watch.configured_log_group_id() is None:
+            raise LiveAmoError("Telegram Log Group is not configured")
+        if saved["source"] in ("TEST","BOTH") and watch.configured_test_group_id() is None:
+            raise LiveAmoError("Authorized Test Group is not configured")
+        account,token=dh.load_credentials()
+        _verified_broker_context(account,token)
+    with managed_db() as con:
+        if enabled:
+            # Repeated ON is idempotent; only a new activation advances freshness.
+            con.execute("""UPDATE control SET live_enabled=1, live_since=?,
+                           arm_seq=arm_seq+1 WHERE id=1 AND live_enabled=0""",
+                        (int(time.time()),))
+        else:
+            con.execute("""UPDATE control SET live_enabled=0,
+                           live_stop_seq=live_stop_seq+1 WHERE id=1""")
+    return editable_settings()
+
+
+def amo_off() -> dict:
+    with managed_db() as con:
+        con.execute("UPDATE control SET armed=0,stop_seq=stop_seq+1 WHERE id=1")
+    return editable_settings()
+
+
+def _regular_session_open() -> bool:
+    from src.engine.market import market_status, MARKET_CLOSE
+    now=datetime.now(IST)
+    # Exclude the closing instant; use the existing verified holiday calendar.
+    return now.time() < MARKET_CLOSE and market_status(now=now, cutoff=MARKET_CLOSE)[0]
+
+
+def _route_window(route: str) -> bool:
+    return _regular_session_open() if route == "REGULAR" else route == "AMO" and _session_closed()
+
+
+def _route_enabled(control: dict, item: dict) -> bool:
+    live=item.get("entry_route", "AMO") == "REGULAR"
+    return bool(control["live_enabled" if live else "armed"]) and (
+        control["live_stop_seq" if live else "stop_seq"] == item["arm_stop_seq"])
 
 
 def reserve(source: str, msg_id: int, symbol: str, sent_utc: int) -> int | None:
@@ -286,15 +361,21 @@ def reserve(source: str, msg_id: int, symbol: str, sent_utc: int) -> int | None:
     if not 0<=now-int(sent_utc)<=MAX_SIGNAL_AGE:
         return None
     if not trading_service_stopped():
-        disarm()
+        stop_all()
         return None
     with managed_db() as con:
         con.execute("BEGIN IMMEDIATE")
         try:
             c=_control(con)
-            if not(c["armed"] and c["source"] in (source,"BOTH")
-                    and int(sent_utc)>=c["armed_since"]):
+            route="REGULAR" if _regular_session_open() else "AMO" if _session_closed() else None
+            live=route == "REGULAR"
+            if not(route and c["live_enabled" if live else "armed"]
+                    and c["source"] in (source,"BOTH")
+                    and int(sent_utc)>=c["live_since" if live else "armed_since"]):
                 con.execute("COMMIT")
+                logging.getLogger(__name__).info(
+                    "ENTRY SKIPPED source=%s route=%s LIVE=%s AMO=%s: check session, selected source, activation time",
+                    source, route or "CLOSED", bool(c["live_enabled"]), bool(c["armed"]))
                 return None
             # NO auto-disarm. UNIQUE(source,msg_id) ensures at-most-one intent
             # per Telegram message across restarts. OFF is owner-controlled.
@@ -308,9 +389,9 @@ def reserve(source: str, msg_id: int, symbol: str, sent_utc: int) -> int | None:
             correlation="RBA-"+digest
             cur=con.execute(
                 """INSERT OR IGNORE INTO intents
-                 (source,msg_id,symbol,alert_ts,created_ts,account,arm_stop_seq,budget,correlation)
-                 VALUES(?,?,?,?,?,?,?,?,?)""",
-                 (source,int(msg_id),symbol,int(sent_utc),now,account,c["stop_seq"],c["budget"],correlation)
+                 (source,msg_id,symbol,alert_ts,created_ts,account,arm_stop_seq,budget,correlation,entry_route)
+                 VALUES(?,?,?,?,?,?,?,?,?,?)""",
+                 (source,int(msg_id),symbol,int(sent_utc),now,account,c["live_stop_seq" if live else "stop_seq"],c["budget"],correlation,route)
             )
             con.execute("COMMIT")
             return int(cur.lastrowid) if cur.rowcount else None
@@ -442,6 +523,37 @@ def _verified_instrument(symbol:str) -> tuple[str, Decimal]:
     return str(inst.security_id),tick
 
 
+def _live_quote_and_size(symbol: str, budget: int, tick: Decimal):
+    from urllib.parse import quote
+    ticker=symbol+".NS"
+    req=Request("https://query1.finance.yahoo.com/v8/finance/chart/"+
+                quote(ticker,safe="")+"?interval=1d&range=1d",
+                headers={"User-Agent":"Mozilla/5.0", "Cache-Control":"no-cache"})
+    with urlopen(req, timeout=8) as response:
+        data=json.load(response)
+    try:
+        meta=data["chart"]["result"][0]["meta"]
+        if meta.get("symbol") != ticker or meta.get("currency") != "INR":
+            raise ValueError("Yahoo symbol/currency mismatch")
+        price=Decimal(str(meta["regularMarketPrice"]))
+        stamp=float(meta["regularMarketTime"])
+        if not price.is_finite() or price <= 0 or not 0 <= time.time()-stamp <= 2:
+            raise ValueError("Yahoo live quote missing, future-dated or older than 2 seconds")
+        pct=Decimal("0.25")
+        config=ROOT/"intraday_buy_settings.json"
+        if config.exists():
+            pct=Decimal(str(json.loads(config.read_text())["buy_buffer_pct"]))
+        if not pct.is_finite() or not 0 <= pct < 100:
+            raise ValueError("Invalid saved buying buffer")
+        limit=(price*(1+pct/100)/tick).to_integral_value(rounding=ROUND_CEILING)*tick
+        qty=int(Decimal(budget)//limit)
+        if qty < 1:
+            raise ValueError("Stock too expensive for current INR "+str(budget)+" budget")
+        return qty,float(limit),stamp
+    except (KeyError,TypeError,IndexError,ArithmeticError,ValueError) as exc:
+        raise LiveAmoError("Regular entry quote unavailable: "+str(exc)) from exc
+
+
 def _quote_and_size(symbol:str,budget:int,tick:Decimal):
     bars=watch.request_bars(symbol)
     if not bars:
@@ -462,6 +574,8 @@ def _quote_and_size(symbol:str,budget:int,tick:Decimal):
 
 
 def _queue(intent:dict,kind:str,body:str):
+    if intent.get("entry_route") == "REGULAR":
+        kind=kind.replace("REAL_AMO", "REAL_REGULAR")
     # Use original listener's durable outbox. Never try Telegram auth here.
     if not re.fullmatch(r"[A-Z0-9_]{5,60}",kind):
         raise ValueError("Invalid broker card kind")
@@ -479,12 +593,13 @@ def _queue(intent:dict,kind:str,body:str):
 
 def _broker_card(intent:dict,summary:str) -> str:
     return "\n".join((
-       "🏦 <b>RESULTBOT — REAL EQUITY AMO</b>",
+       f"🏦 <b>RESULTBOT — REAL EQUITY {escape(intent.get('entry_route', 'AMO'))}</b>",
        f"📈 #{escape(intent['symbol'])}",
        f"📩 Source: {escape(intent['source'])} | Telegram ID {intent['msg_id']}",
        f"🔁 {escape(summary)}",
        f"🧾 Dhan order ID: <b>{escape(intent['order_id'] or 'UNCONFIRMED')}</b>",
        f"📋 Broker status: {escape(intent['broker_status'] or intent['state'])}",
+       f"Details: {escape(intent.get('note', ''))}",
        f"💵 CNC LIMIT ₹{intent['price']:.2f} × {intent['qty']}",
        "⚠️ REAL brokerage order. OFF does not cancel it; partial fills remain owned even after cancellation.",
     ))
@@ -505,8 +620,8 @@ def _verify_owned_order(intent:dict,token:str) -> dict:
     for name,value in expected.items():
         if str(order.get(name) or "")!=str(value):
             raise LiveAmoError("Dhan order binding mismatch: "+name)
-    if order.get("afterMarketOrder") is not True:
-        raise LiveAmoError("Dhan order is not marked as AMO")
+    if order.get("afterMarketOrder") is not (intent.get("entry_route", "AMO") == "AMO"):
+        raise LiveAmoError("Dhan order route differs from the reserved route")
     return order
 
 
@@ -515,11 +630,16 @@ def execute(intent_id:int) -> None:
     item=_intent(intent_id)
     if item["state"]!="RESERVED":
         return
+    with managed_db() as con:
+        claimed=con.execute("""UPDATE intents SET state='PREPARING', note='Preparing order'
+                               WHERE id=? AND state='RESERVED'""", (intent_id,))
+        if claimed.rowcount != 1:
+            return
     try:
         if not trading_service_stopped():
             raise LiveAmoError("Trading service not safely stopped")
-        if not _session_closed():
-            raise LiveAmoError("Not in conservative NSE after-market window")
+        if not _route_window(item["entry_route"]):
+            raise LiveAmoError("Outside reserved "+item["entry_route"]+" trading window")
         if int(time.time())-item["alert_ts"]>MAX_SIGNAL_AGE:
             raise LiveAmoError("Telegram alert became stale before order submission")
         _update(intent_id,"PREPARING",note="Verifying broker account, IP, funds and market reference")
@@ -529,10 +649,10 @@ def execute(intent_id:int) -> None:
         balance=_verified_broker_context(account,token)
         security_id,tick=_verified_instrument(item["symbol"])
         budget=int(item["budget"])
-        qty,price,quote_ts=_quote_and_size(item["symbol"],budget,tick)
+        qty,price,quote_ts=(_live_quote_and_size if item["entry_route"] == "REGULAR" else _quote_and_size)(item["symbol"],budget,tick)
         if balance < qty*price:
             raise LiveAmoError("Order value exceeds available Dhan funds")
-        if not trading_service_stopped() or not _session_closed():
+        if not trading_service_stopped() or not _route_window(item["entry_route"]):
             raise LiveAmoError("Safety conditions changed before submission")
         if time.time()-item["alert_ts"]>MAX_SIGNAL_AGE:
             raise LiveAmoError("Telegram alert stale before final submission")
@@ -542,10 +662,9 @@ def execute(intent_id:int) -> None:
             con.execute("BEGIN IMMEDIATE")
             try:
                 control=_control(con)
-                if (not control["armed"] or
-                    control["stop_seq"] != item["arm_stop_seq"] or
+                if (not _route_enabled(control,item) or
                     control["source"] not in (item["source"],"BOTH")):
-                    raise LiveAmoError("AMO is OFF or owner changed the active source")
+                    raise LiveAmoError("Entry route is OFF or owner changed the active source")
                 # In-flight orders need funds reserved even if simultaneous
                 # Dhan fund reads still show the original available balance.
                 # This is a financial exposure check, NOT a count-based limit.
@@ -559,6 +678,10 @@ def execute(intent_id:int) -> None:
                     raise LiveAmoError(
                         "Order value exceeds Dhan funds after other pending orders"
                     )
+                if not _route_window(item["entry_route"]):
+                    raise LiveAmoError("Market window changed before submission")
+                if item["entry_route"] == "REGULAR" and not 0 <= time.time()-quote_ts <= 2:
+                    raise LiveAmoError("Live Yahoo quote exceeded 2 seconds before submission")
                 changed=con.execute(
                     """UPDATE intents SET state='SUBMITTING',note=?,security_id=?,qty=?,price=?
                        WHERE id=? AND state='PREPARING'""",
@@ -576,8 +699,10 @@ def execute(intent_id:int) -> None:
           "transactionType":"BUY","exchangeSegment":"NSE_EQ","productType":"CNC",
           "orderType":"LIMIT","validity":"DAY","securityId":security_id,
           "quantity":qty,"price":price,"triggerPrice":0,
-          "disclosedQuantity":0,"afterMarketOrder":True,"amoTime":"OPEN"
+          "disclosedQuantity":0,"afterMarketOrder":item["entry_route"] == "AMO"
         }
+        if item["entry_route"] == "AMO":
+            payload["amoTime"]="OPEN"
         try:
             result=_dhan_http("POST","/orders",token,payload)
         except LiveAmoError:
@@ -603,21 +728,21 @@ def execute(intent_id:int) -> None:
                    _broker_card(_intent(intent_id),"Order ID received but broker verification inconclusive"))
             return
         final_status=str(detail.get("orderStatus") or "PENDING").upper()
-        if final_status not in ("PENDING","TRANSIT"):
-            _update(intent_id,"UNKNOWN",note="Unusual Dhan AMO broker status; manual verification",
+        if final_status not in ("PENDING","TRANSIT","PART_TRADED",*TERMINAL):
+            _update(intent_id,"UNKNOWN",note="Unrecognized Dhan order status; manual verification",
                     broker_status=final_status)
             _queue(_intent(intent_id),"REAL_AMO_UNKNOWN",_broker_card(_intent(intent_id),
                 "Order ID verified; Dhan status requires review"))
             return
-        _update(intent_id,"ACKED",note="Verified REAL AMO received by Dhan; owner may cancel separately",
+        _update(intent_id,"TERMINAL" if final_status in TERMINAL else "ACKED",note="Broker-verified equity order status",
                 broker_status=final_status)
         _queue(_intent(intent_id),"REAL_AMO_ACK",_broker_card(_intent(intent_id),
-              "Verified LIVE AMO accepted at Dhan; cancellation is owner-controlled"))
+              "Dhan order verified; see broker status and fills"))
     except (dh.DhanReadError,LiveAmoError,ValueError,ImportError,OSError) as exc:
         state=_intent(intent_id)["state"]
         if state=="SUBMITTING":
             _update(intent_id,"UNKNOWN",note="Order submission may have occurred; manual reconciliation")
-        elif state not in ("ACKED","UNKNOWN"):
+        elif state not in ("ACKED","UNKNOWN","TERMINAL"):
             _update(intent_id,"BLOCKED",note=str(exc)[:150])
         item=_intent(intent_id)
         _queue(item,"REAL_AMO_BLOCKED" if item["state"]=="BLOCKED" else "REAL_AMO_UNKNOWN",
@@ -713,10 +838,12 @@ def reconcile_unknown(intent_id:int) -> bool:
     if (str(order.get("exchangeSegment"))!="NSE_EQ" or
         str(order.get("productType"))!="CNC" or
         str(order.get("transactionType"))!="BUY" or
-        order.get("afterMarketOrder") is not True):
-        raise LiveAmoError("Dhan order route is not the intended Equity AMO")
+        order.get("afterMarketOrder") is not (item.get("entry_route", "AMO") == "AMO") or
+        str(order.get("orderType"))!="LIMIT"):
+        raise LiveAmoError("Dhan order route differs from the reserved equity order")
     status=str(order.get("orderStatus") or "UNKNOWN").upper()
-    _update(intent_id,"ACKED" if status in ("PENDING","TRANSIT") else "UNKNOWN",
+    _update(intent_id,"TERMINAL" if status in TERMINAL else
+            "ACKED" if status in ("PENDING","TRANSIT","PART_TRADED") else "UNKNOWN",
             order_id=oid,broker_status=status,
             cancel_after=0,
             note="Broker correlation verified after uncertain order response")
@@ -808,7 +935,11 @@ def main():
     edit.add_argument("--show",action="store_true",
                       help="display current settings without changing anything")
     sub.add_parser("self-test")
-    sub.add_parser("off")
+    sub.add_parser("off", help="Legacy AMO OFF only")
+    sub.add_parser("stop-all", help="Stop BOTH regular and AMO new entries")
+    sub.add_parser("live-on", help="Enable regular-session entries using saved source/budget")
+    sub.add_parser("live-off", help="Stop regular-session new entries")
+    sub.add_parser("amo-off", help="Stop AMO new entries only")
     x=sub.add_parser("arm")
     x.add_argument("--source",choices=["TEST","EARNINGS_PULSE","BOTH"],default=None)
     x.add_argument("--budget",type=int,default=None)
@@ -839,6 +970,10 @@ def main():
             print("PRE-FLIGHT BLOCKED: "+str(exc),file=sys.stderr)
             raise SystemExit(1) from None
         return
+    if a.cmd in ("live-on","live-off"):
+        print(json.dumps(set_live(a.cmd=="live-on"),indent=2));return
+    if a.cmd=="amo-off": print(json.dumps(amo_off(),indent=2));return
+    if a.cmd=="stop-all": print(json.dumps(stop_all(),indent=2));return
     if a.cmd=="off": print(json.dumps(disarm(),indent=2));return
     if a.cmd=="arm":
         # Bare 'arm' uses SAVED settings, never resets owner choices to BOTH/500.
