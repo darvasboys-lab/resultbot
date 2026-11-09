@@ -41,6 +41,8 @@ chmod 700 "$D" "$ROOT/data"
 for src in "$ROOT"/resultbot_runtime/*.py "$ROOT"/resultbot_runtime/*.sh; do
     install -m 700 "$src" "$D/$(basename "$src")"
 done
+# OCO manual-exit cancellation module; no auto-enable on fresh installs.
+install -m 700 "$ROOT/deploy/resultbot/oco_manual_exit.py" "$D/oco_manual_exit.py"
 install -m 700 "$ROOT/deploy/resultbot/bot" "$HOME/.local/bin/bot"
 install -m 600 "$ROOT/deploy/resultbot/menu.sh" "$HOME/.local/share/resultbot/menu.sh"
 install -m 600 "$ROOT/deploy/resultbot/status_dashboard.py" "$HOME/.local/share/resultbot/status_dashboard.py"
