@@ -117,6 +117,36 @@ def quote_policy():
     return "REVIEW", "warn", "quote checks differ or not found"
 
 
+def broker_open_orders():
+    """Read-only broker snapshot, restricted to recorded ResultBot order IDs."""
+    try:
+        sys.path.insert(0, str(ROOT))
+        import oco_guard as guard
+        account, token = guard.dh.load_credentials()
+        with sqlite3.connect((ROOT / "equity_amo_live.sqlite3").as_uri() + "?mode=ro",
+                             uri=True, timeout=2) as c:
+            bought = {str(r[0]) for r in c.execute(
+                "SELECT order_id FROM intents WHERE order_id != ''"
+            )}
+        with sqlite3.connect((ROOT / "oco_guard.sqlite3").as_uri() + "?mode=ro",
+                             uri=True, timeout=2) as c:
+            protected = {str(r[0]) for r in c.execute(
+                "SELECT order_id FROM coverage WHERE order_id != ''"
+            )}
+        orders = guard.api("GET", "/orders", token)
+        forever = guard.api("GET", "/forever/orders", token)
+        active = {"TRANSIT", "PENDING", "PART_TRADED", "CONFIRM"}
+        buy = {str(o.get("orderId")) for o in orders
+               if str(o.get("orderId")) in bought and
+               str(o.get("orderStatus") or "").upper() in active}
+        oco = {str(o.get("orderId")) for o in forever
+               if str(o.get("orderId")) in protected and
+               str(o.get("orderStatus") or "").upper() in active}
+        return len(buy), len(oco), None
+    except Exception as exc:
+        return 0, 0, type(exc).__name__
+
+
 def main():
     now = datetime.now(ZoneInfo("Asia/Kolkata")).strftime("%d %b %Y · %I:%M %p IST")
     print()
@@ -159,6 +189,14 @@ def main():
         pending = c["pending"]
         table_row("Unresolved intents", "CLEAR" if not pending else str(pending) + " REVIEW",
                   "0 uncertain broker submissions" if not pending else "check UNKNOWN / SUBMITTING", "good" if not pending else "warn")
+    pending_buy, pending_oco, broker_error = broker_open_orders()
+    if broker_error:
+        table_row("Broker open orders", "UNKNOWN", "Dhan check: " + broker_error, "warn")
+    else:
+        total = pending_buy + pending_oco
+        table_row("Broker open orders", str(total) + " OPEN",
+                  f"ResultBot BUY {pending_buy}; OCO {pending_oco}",
+                  "good" if total == 0 else "info")
     s, lev, detail = quote_policy()
     table_row("Yahoo quote policy", s, detail, "good" if lev == "info" else lev)
     print(border("├", "┼", "┤"))
