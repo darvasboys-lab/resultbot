@@ -202,11 +202,11 @@ def main():
     print(border("├", "┼", "┤"))
     if c:
         table_row("After-market BUY (AMO)", "ON" if c["amo"] else "OFF",
-                  "independent owner switch", "good" if c["amo"] else "bad")
+                  "independent owner switch (OFF preferred)", "bad" if c["amo"] else "good")
     else:
         table_row("After-market BUY (AMO)", "UNKNOWN", "trading settings unavailable", "warn")
     print(border("└", "┴", "┘"))
-    print(styled("  ● Green = verified ON / running   ", GREEN) + styled("● Red = OFF / stopped   ", RED) + styled("● Yellow = review", YELLOW))
+    print(styled("  ● Green = healthy / AMO OFF   ", GREEN) + styled("● Red = stopped / AMO ON   ", RED) + styled("● Yellow = review", YELLOW))
     print("  ACKED orders are not unresolved intents; this view does not query live broker orders.")
     print("  OFF can be intentional. Service RUNNING does not prove broker connectivity.")
     print("  Read-only check: no orders sent, settings changed, or services restarted.")
