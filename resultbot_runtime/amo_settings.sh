@@ -38,9 +38,18 @@ compactbutton=white,blue
 shadow=black,black
 '
 whiptail() {
-    command whiptail \
-        --backtitle "RESULTBOT  |  CONTROL CENTER  |  Arrow keys: move   Enter: select   Esc: back" \
-        "$@"
+    # Refresh the header from the persisted owner settings on EVERY dialog,
+    # including immediately after returning from a budget edit.
+    local amount cols left right pad backtitle
+    amount="$(get_setting per_order_budget_inr 2>/dev/null)" || amount="UNAVAILABLE"
+    left="RESULTBOT  |  CONTROL CENTER"
+    right="PER ORDER: INR ${amount}"
+    cols="$(tput cols 2>/dev/null || printf '100')"
+    [[ "$cols" =~ ^[0-9]+$ ]] || cols=100
+    pad=$((cols - ${#left} - ${#right} - 3))
+    (( pad >= 2 )) || pad=2
+    printf -v backtitle '%s%*s%s' "$left" "$pad" '' "$right"
+    command whiptail --backtitle "$backtitle" "$@"
 }
 # END RESULTBOT RETRO THEME
 
@@ -73,10 +82,14 @@ notice() {
 }
 
 select_menu() {
+    # Never cache the menu's per-order amount; always reload the live saved value.
+    local display_amount
+    display_amount="$(get_setting per_order_budget_inr 2>/dev/null)" || display_amount="UNAVAILABLE"
     if [[ -t 0 ]] && command -v whiptail >/dev/null 2>&1; then
         whiptail --title "RESULTBOT  |  SETTINGS" \
-          --menu "Choose a setting below. Changes apply to future signals.
+          --menu "SAVED PER-ORDER AMOUNT: INR $display_amount
 
+Choose a setting below. Changes apply to future signals.
 Existing orders remain unchanged." \
           19 84 6 \
           "1" "ALERT SOURCE     Choose which Telegram groups to follow" \
@@ -188,7 +201,18 @@ except ValueError: sys.exit(1)' "$desired"; then
         return 0
     fi
     echo "$outcome"
-    echo "Saved. Every FUTURE eligible signal uses the new INR $desired budget."
+    # Verify the canonical saved amount, rather than showing the unsaved input.
+    local verified expected
+    verified="$(get_setting per_order_budget_inr)" || {
+        notice "The save command returned successfully, but the saved amount could not be verified. Reopen settings to inspect it."
+        return 0
+    }
+    expected="$("$PY" -c 'import sys; print(int(sys.argv[1]))' "$desired")"
+    if [[ "$verified" != "$expected" ]]; then
+        notice "Saved value differs from the submitted amount. Current per-order amount: INR $verified. Review before the next order."
+        return 0
+    fi
+    notice "PER-ORDER AMOUNT SAVED: INR $verified. The settings screen will now display this amount. Future orders use the saved amount."
 }
 
 echo "======================================================"
