@@ -16,8 +16,8 @@ REFRESH_TIMER="resultbot-dhan-token-refresh.timer"
 DEST="$ROOT/daily_health_report_v2.py"
 DROP_DIR="$UNITS/$DAILY_SERVICE.d"
 DROP="$DROP_DIR/80-visual-health.conf"
-SOURCE_COMMIT='9e24e46cee94dc8af983dc667dbad02fb74ec013'
-SOURCE_SHA256='fd398270ccf6768dd5065d5954589c6c14ee0f212dfb5b3a8d1409317066dd40'
+SOURCE_COMMIT='d318b76da1b5e09a7eaf39498cb2c066cbedff2b'
+SOURCE_SHA256='dbeb4a49fb65ea600ea7b759b5e3e8a77ed37eaef5758533ee224b2bf8e52668'
 
 [[ -x "$PY" && -d "$ROOT" && -d "$UNITS" ]] || {
   echo 'STOP: ResultBot runtime not found.' >&2; exit 1;
