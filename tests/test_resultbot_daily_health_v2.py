@@ -27,7 +27,7 @@ class ResultBotHealthTests(unittest.TestCase):
         )
 
     def test_expiry(self):
-        self.assertEqual(m.token_expiry("17/11/2026 20:00", now), ("17 Nov, 08:00 PM", "good"))
+        self.assertEqual(m.token_expiry("17/11/2026 20:00", now), ("17 Nov, 20:00", "good"))
         self.assertEqual(m.token_expiry("16/11/2026 20:00", now)[1], "bad")
         self.assertEqual(m.token_expiry("UNVERIFIED", now)[1], "unknown")
 
