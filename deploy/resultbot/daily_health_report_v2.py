@@ -102,7 +102,7 @@ def token_expiry(raw: str, now: datetime) -> tuple[str, str]:
     if value.tzinfo is None:
         value = value.replace(tzinfo=IST)
     value = value.astimezone(IST)
-    return value.strftime("%d %b %Y, %I:%M %p IST"), (
+    return value.strftime("%d %b, %I:%M %p"), (
         "good" if value > now else "bad"
     )
 
