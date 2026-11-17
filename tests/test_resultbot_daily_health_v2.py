@@ -43,6 +43,7 @@ class ResultBotHealthTests(unittest.TestCase):
             "🟢 DHAN AUTHENTICATION", "🟢 Token Refresh: SUCCESS",
             "🟢 TRADING SETTINGS", "🟢 Per Order: ₹19,500",
             "🟢 SERVICES", "🟢 OCO Guard: RUNNING",
+            "🟢 Token Validity: 17 Nov, 08:00 PM",
         ):
             self.assertIn(expected, report)
         for excluded in ("ACKED", "uncertain", "OVERALL", "REVIEW REQUIRED"):
