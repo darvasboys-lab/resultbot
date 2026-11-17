@@ -189,7 +189,7 @@ def report(now: datetime | None = None) -> str:
         f"{dot(refresh_state)} Token Refresh: {refreshed}",
         f"{dot(broker_state)} Dhan Connection: {'VERIFIED' if connected else 'FAILED'}",
         f"{dot(broker_state)} Account Identity: {'MATCHED' if connected else 'UNVERIFIED'}",
-        f"{dot(expiry_state)} Token Valid Until: {expiry_display}",
+        f"{dot(expiry_state)} Token Validity: {expiry_display}",
         "",
         f"{dot(section([state for _, state in trade_settings]))} TRADING SETTINGS",
     ]
